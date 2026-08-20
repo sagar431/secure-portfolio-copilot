@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
+from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -51,10 +52,12 @@ async def auth_harness(tmp_path: Path) -> AsyncIterator[AuthHarness]:
         jwt_audience="integration-test-audience",
         demo_user_password=SecretStr(DEMO_PASSWORD),
         document_storage_path=tmp_path / "document-storage",
+        embedding_provider="fake",
     )
     test_engine = create_async_engine(database_url)
     session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
     async with test_engine.begin() as connection:
+        await connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await connection.run_sync(Base.metadata.drop_all)
         await connection.run_sync(Base.metadata.create_all)
     async with session_factory() as session:

@@ -1,4 +1,4 @@
-# Step 4 Security Invariants
+# Step 5 Security Invariants
 
 These rules apply now and must remain true as later milestones are approved.
 
@@ -69,8 +69,9 @@ These rules apply now and must remain true as later milestones are approved.
     classification, document/version identity, version status, deletion state, and active status.
     Chunk metadata cannot widen source-document authority.
 30. **Atomic replacement.** Approval locks the managed version and commits its lifecycle transition,
-    old-chunk deactivation, new-chunk insertion, and current-version pointer together. A chunking
-    failure rolls back the replacement and returns a generic `indexing_failed` error.
+    old-chunk/vector invalidation, new READY chunk/vector insertion, and current-version pointer
+    together. Chunking or embedding failure rolls back the replacement and returns a generic safe
+    error.
 31. **Immediate removal.** Replacement, rejection, and deletion deactivate affected chunks in the
     same transaction as their authoritative lifecycle change. Search also rechecks authoritative
     document/version rows, so copied flags alone are never sufficient.
@@ -81,8 +82,8 @@ These rules apply now and must remain true as later milestones are approved.
     an immutable `AuthorizationScope`; no unscoped production retrieval method exists.
 34. **Authorization before materialization.** Tenant, company, department, exact
     visibility/classification, capability, approval, deletion, active-version, current-version, and
-    active tenant/company filters are SQL predicates in the search statement before rank/limit rows
-    are returned.
+    active tenant/company filters are SQL predicates in a materialized authorized CTE before vector
+    distance, hybrid rank, ordering, or limit is applied.
 35. **Bounded deterministic search.** Queries normalize to 1–500 characters, `top_k` is 1–20,
     excerpts are at most 500 characters, and total excerpt output is at most 10,000 characters.
 36. **No forged search scope.** The search body accepts only query and `top_k`. Tenant, company,
@@ -91,12 +92,47 @@ These rules apply now and must remain true as later milestones are approved.
 37. **No query authority for upload admins.** Nora receives a generic 403 before repository search.
     `MANAGE_UPLOADS` still never implies `QUERY_DOCUMENTS`.
 38. **Metadata-only search audit.** Search logs/audits contain request/actor/resource IDs and counts,
-    never query text, raw candidates, excerpts, or document content. Forbidden candidates are absent
-    from responses, logs, traces, caches, and debug output.
+    plus bounded `top_k`, never query text, vectors, raw candidates, excerpts, or document content.
+    Forbidden candidates are absent from responses, logs, traces, caches, and debug output.
 39. **Development-only inspector.** The backend search route is registered only in development/test.
     Production frontend builds omit the search route, navigation, page, and endpoint client.
-40. **No Step 5 capabilities.** This step contains no embeddings, vector/hybrid retrieval, reranker,
-    LLM, MCP, memory, calculation, arbitrary code execution, agent, or cloud integration.
+40. **Exact embedding contract.** Persisted READY rows use `nomic-embed-text:v1.5`, 768 dimensions,
+    a finite non-zero vector, and an `embedding_chunk_hash` equal to the chunk's current
+    `content_hash`. Wrong-model, wrong-dimension, null, stale-hash, and non-READY rows cannot enter
+    hybrid retrieval.
+41. **Provider output is untrusted.** Batch cardinality, dimensions, finiteness, non-zero norm, total
+    chunks, and time are validated before persistence. Provider errors expose only a generic message,
+    never an upstream body, URL, model response, query, content, or internal reason code.
+42. **Development providers only.** Ollama is restricted to explicit HTTP loopback URLs, disables
+    environment proxy inheritance, and never substitutes another model. The deterministic fake is
+    test-only. Production accepts only the disabled provider and omits development retrieval routes.
+43. **Capability before query embedding.** A caller without `QUERY_DOCUMENTS` is denied before the
+    embedding provider and retrieval repository are invoked. Search sends only the authorized
+    caller's query to the provider, never candidate document content.
+44. **Authorization before vector ranking.** Hybrid SQL references cosine distance only through
+    `authorized_chunks AS MATERIALIZED`. Raw `document_chunks.embedding` cannot be vector-ranked
+    before grant-correlated ACL, copied-to-authoritative equality, and current lifecycle filters.
+45. **Deterministic bounded fusion.** Hybrid scores are bounded to `[0,1]` and use the fixed formula
+    `0.35 * keyword + 0.65 * vector`; ordering is final score, keyword score, then chunk ID. Query,
+    `top_k`, result, and excerpt limits remain enforced.
+46. **Embedding lifecycle follows source lifecycle.** Replacement, rejection, and deletion clear
+    vectors/model/hash metadata and mark affected rows `STALE` in the authoritative transaction.
+    Approval publishes READY vectors only with the current approved version.
+47. **Authorized bounded backfill.** Reindexing accepts no client scope and processes only bounded
+    `PENDING`/`FAILED`, active, current-approved rows inside a current admin `MANAGE_UPLOADS`
+    workspace/company grant. It rechecks authoritative ACL/lifecycle state and locks candidates with
+    `SKIP LOCKED`; query access alone never permits reindexing.
+48. **No unsafe fallback.** Provider failure returns a generic 503. Search does not silently fall
+    back to keyword-only results, and approval/reindex does not persist partial or invalid vectors.
+49. **Citation integrity at the boundary.** Returned citation IDs, version, excerpt, and source
+    location are constructed from the same authorized repository row as the result. The frontend
+    validates their equality and renders excerpts as inert text.
+50. **Honest evaluation state.** Checked-in curated synthetic queries report their measured
+    Recall@5, expected hit, and authorization-leak count. Ad hoc queries report `not_run`; UI fixtures
+    are not represented as additional measured results.
+51. **No later capabilities.** This step contains no reranker, semantic query rewrite, generated
+    answer, LLM, MCP, memory, calculation, arbitrary code execution, agent, cloud provider, or
+    production search endpoint.
 
 Automated tests cover password/token primitives, exact seeded scopes, policy reason codes, generic
 login errors, forged fields, malformed/expired/wrong-issuer/wrong-audience/wrong-signature tokens,
@@ -105,5 +141,8 @@ database-readiness failure, frontend session failure, upload authorization, stri
 malicious/malformed formats, parser/storage limits, state transitions, idempotency, versioning,
 preview provenance, inert formulas, deletion, deterministic chunk provenance, metadata inheritance,
 approved-only creation, atomic replacement, rejection/deletion, mandatory repository scope,
-six-user isolation, forged search values, query/result/excerpt bounds, safe audit/logging, and
-capability-gated frontend behavior.
+six-user isolation, forged search values, query/result/excerpt bounds, safe audit/logging,
+provider/model validation, bounded batching, production/provider isolation, authorization-before-
+vector SQL construction, embedding invalidation/backfill, citation response validation, and
+capability-gated frontend behavior. Final verification passes 167 backend and 47 frontend tests,
+plus migration reversibility/drift, live Ollama, production exclusion, and integrity gates.

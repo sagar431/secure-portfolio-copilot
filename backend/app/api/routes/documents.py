@@ -11,6 +11,7 @@ from app.auth.dependencies import CurrentAuthorizationContext
 from app.core.config import Settings, get_settings
 from app.core.errors import APIError
 from app.db.session import get_db_session
+from app.embeddings.factory import create_embedding_provider
 from app.ingestion.limits import DEFAULT_LIMITS
 from app.ingestion.service import DocumentIngestionService
 from app.ingestion.storage import LocalObjectStorage
@@ -38,6 +39,10 @@ def get_document_service(
     return DocumentIngestionService(
         session,
         LocalObjectStorage(Path(settings.document_storage_path)),
+        create_embedding_provider(settings),
+        embedding_batch_size=settings.embedding_batch_size,
+        embedding_max_chunks=settings.embedding_max_chunks,
+        embedding_operation_timeout_seconds=settings.embedding_operation_timeout_seconds,
     )
 
 

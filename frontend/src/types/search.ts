@@ -28,9 +28,24 @@ export interface SearchScopeGrantData {
 }
 
 export interface SearchIndexingData {
-  status: 'ready' | 'indexing'
+  status: SearchAvailabilityStatus
   active_chunk_count: number
   indexed_document_count: number
+  embedding: SearchEmbeddingData
+}
+
+export type SearchAvailabilityStatus = 'ready' | 'indexing' | 'degraded'
+
+export type SearchEmbeddingStatus =
+  'ready' | 'indexing' | 'degraded' | 'unavailable'
+
+export interface SearchEmbeddingData {
+  status: SearchEmbeddingStatus
+  model: string
+  dimensions: number
+  embedded_chunk_count: number
+  pending_chunk_count: number
+  failed_chunk_count: number
 }
 
 export interface SearchSourceData {
@@ -54,19 +69,48 @@ export interface SearchDocumentData {
   classification: DocumentClassification
 }
 
+export interface SearchScoreData {
+  keyword: number
+  vector: number
+  final: number
+}
+
+export interface SearchCitationData extends SearchSourceData {
+  chunk_id: string
+  document_id: string
+  document_version_id: string
+  document_title: string
+  version_number: number
+  excerpt: string
+}
+
 export interface AuthorizedSearchResultData {
   chunk_id: string
   document_id: string
   document_version_id: string
   version_number: number
   excerpt: string
-  score: number
+  scores: SearchScoreData
   source: SearchSourceData
+  citation: SearchCitationData
   document: SearchDocumentData
 }
 
+export type SearchEvaluationSummaryData =
+  | {
+      status: 'not_run'
+    }
+  | {
+      status: 'complete'
+      dataset_name: string
+      curated_query_count: number
+      recall_at_5: number
+      expected_top_5_hits: number
+      authorization_leak_count: number
+    }
+
 export interface AuthorizedSearchData {
-  status: 'ready' | 'indexing'
+  status: SearchAvailabilityStatus
   query: string
   top_k: number
   result_count: number
@@ -74,5 +118,6 @@ export interface AuthorizedSearchData {
     grants: SearchScopeGrantData[]
   }
   indexing: SearchIndexingData
+  evaluation_summary: SearchEvaluationSummaryData
   results: AuthorizedSearchResultData[]
 }

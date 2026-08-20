@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chunking import ChunkingError, GeneratedChunk
 from app.core.errors import APIError
+from app.embeddings.contracts import EmbeddingProvider, EmbeddingProviderError
 from app.ingestion.audit import record_document_event
 from app.ingestion.contracts import (
     ParsedDocument,
@@ -59,8 +60,10 @@ from app.models.identity import Capability, Company, Department, Tenant
 from app.policies.engine import authorize
 from app.policies.models import AuthorizationContext, PolicyRequest
 from app.retrieval.indexing import (
+    EmbeddedChunk,
     deactivate_document_chunks,
     deactivate_version_chunks,
+    embed_generated_chunks,
     generate_approved_chunks,
     replace_active_chunks,
 )
@@ -241,11 +244,19 @@ class DocumentIngestionService:
         self,
         session: AsyncSession,
         storage: LocalObjectStorage,
+        embedding_provider: EmbeddingProvider,
         *,
+        embedding_batch_size: int = 16,
+        embedding_max_chunks: int = 512,
+        embedding_operation_timeout_seconds: float = 120.0,
         parser: Parser = parse_in_worker,
     ) -> None:
         self.session = session
         self.storage = storage
+        self.embedding_provider = embedding_provider
+        self.embedding_batch_size = embedding_batch_size
+        self.embedding_max_chunks = embedding_max_chunks
+        self.embedding_operation_timeout_seconds = embedding_operation_timeout_seconds
         self.parser = parser
 
     async def _authorize_target(
@@ -1121,16 +1132,26 @@ class DocumentIngestionService:
             ) from None
         actor_id = context.identity.user_id
         generated_chunks: tuple[GeneratedChunk, ...] = ()
+        embedded_chunks: tuple[EmbeddedChunk, ...] = ()
         if target == IngestionStatus.APPROVED:
             version.approved_by_user_id = actor_id
             version.approved_at = _now()
             document.current_approved_version_id = version.id
             try:
                 generated_chunks = generate_approved_chunks(document, version)
-            except (ChunkingError, ValueError) as error:
+                embedded_chunks = await embed_generated_chunks(
+                    self.embedding_provider,
+                    generated_chunks,
+                    batch_size=self.embedding_batch_size,
+                    max_chunks=self.embedding_max_chunks,
+                    timeout_seconds=self.embedding_operation_timeout_seconds,
+                )
+            except (ChunkingError, EmbeddingProviderError, ValueError) as error:
                 reason_code = (
                     error.code.value if isinstance(error, ChunkingError) else "INVALID_SOURCE"
                 )
+                if isinstance(error, EmbeddingProviderError):
+                    reason_code = error.code.value
                 tenant_id = document.tenant_id
                 company_id = document.company_id
                 failed_document_id = document.id
@@ -1152,15 +1173,18 @@ class DocumentIngestionService:
                 )
                 await self.session.commit()
                 raise APIError(
-                    422,
-                    "indexing_failed",
+                    503 if isinstance(error, EmbeddingProviderError) else 422,
+                    "embedding_unavailable"
+                    if isinstance(error, EmbeddingProviderError)
+                    else "indexing_failed",
                     "Document indexing failed safely.",
                 ) from None
             deactivated = await replace_active_chunks(
                 self.session,
                 document,
                 version,
-                generated_chunks,
+                embedded_chunks,
+                self.embedding_provider.model,
             )
         else:
             version.rejected_by_user_id = actor_id

@@ -97,6 +97,94 @@ describe('searchAuthorizedDocuments', () => {
     )
   })
 
+  it.each([
+    [
+      'an out-of-range score',
+      {
+        ...authorizedSearchData,
+        results: [
+          {
+            ...authorizedSearchData.results[0],
+            scores: {
+              ...authorizedSearchData.results[0].scores,
+              vector: 1.01,
+            },
+          },
+        ],
+      },
+    ],
+    [
+      'citation identity that does not match the result',
+      {
+        ...authorizedSearchData,
+        results: [
+          {
+            ...authorizedSearchData.results[0],
+            citation: {
+              ...authorizedSearchData.results[0].citation,
+              chunk_id: 'different-chunk',
+            },
+          },
+        ],
+      },
+    ],
+    [
+      'invalid embedding dimensions',
+      {
+        ...authorizedSearchData,
+        indexing: {
+          ...authorizedSearchData.indexing,
+          embedding: {
+            ...authorizedSearchData.indexing.embedding,
+            dimensions: 0,
+          },
+        },
+      },
+    ],
+    [
+      'invalid recall',
+      {
+        ...authorizedSearchData,
+        evaluation_summary: {
+          status: 'complete',
+          dataset_name: 'synthetic-retrieval-v1',
+          curated_query_count: 8,
+          recall_at_5: Number.NaN,
+          expected_top_5_hits: 7,
+          authorization_leak_count: 0,
+        },
+      },
+    ],
+    [
+      'an unexpected response field',
+      { ...authorizedSearchData, raw_query: 'must not be exposed' },
+    ],
+  ])('rejects %s', async (_description, malformedData) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          data: malformedData,
+          request_id: 'strict-contract-request',
+        }),
+      ),
+    )
+
+    await expect(
+      searchAuthorizedDocuments('signed-token', {
+        query: 'margin',
+        top_k: 5,
+      }),
+    ).rejects.toEqual(
+      new ApiError(
+        'Backend returned an invalid response.',
+        200,
+        'invalid_response',
+        'strict-contract-request',
+      ),
+    )
+  })
+
   it('preserves a safe error envelope and request ID', async () => {
     vi.stubGlobal(
       'fetch',

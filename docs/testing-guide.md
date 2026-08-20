@@ -1,7 +1,9 @@
-# Step 4 Testing Guide
+# Step 5 Testing Guide
 
 Run commands from the locations shown. Tests use only synthetic identities and an isolated tmpfs
-PostgreSQL test service.
+PostgreSQL test service. On 2026-08-21 these commands passed with 167 backend tests and 47 frontend
+tests. Automated tests configure the deterministic fake embedding provider and do not require
+Ollama.
 
 ## Backend quality checks
 
@@ -20,13 +22,12 @@ TEST_DATABASE_URL=postgresql+asyncpg://portfolio:portfolio_test@127.0.0.1:5433/p
   uv run pytest
 ```
 
-The 132-test suite includes all Step 1–3 regressions plus document state-machine units, real PDF/XLSX/CSV
-parsing, malicious container/signature/MIME cases, storage confinement and permissions, formula
-inertness, PostgreSQL-backed upload/preview/approval/rejection/version/deletion flows, safe audit
-records, idempotency, deterministic PDF/spreadsheet chunking, PostgreSQL full-text search, mandatory
-repository scope, six-user tenant/department isolation, forged-scope denial, replacement/deletion,
-query/result/excerpt limits, and log/audit redaction. PostgreSQL-backed tests refuse any database not
-named `portfolio_test`.
+The suite includes all Step 1–4 regressions plus provider determinism, bounded ordered batches,
+dimension/finite/non-zero rejection, production-provider restrictions, loopback-only Ollama URLs,
+content-free provider errors, authorization-before-vector SQL construction, approved-version READY
+vectors, lifecycle invalidation, bounded authorized backfill, copied-ACL corruption, hybrid scores,
+citation identity/provenance, six-user isolation, forged values, and log/audit redaction.
+PostgreSQL-backed tests refuse any database not named `portfolio_test`.
 
 ## Frontend quality checks
 
@@ -44,8 +45,10 @@ Vitest uses jsdom and React Testing Library. `fetch` and XHR are replaced with d
 progress, poll, error, and cancellation behavior; no backend process is required for these tests.
 Coverage includes capability gating, trusted option cascades, multipart metadata, safe request-ID
 errors, previews with coordinates, inert unsafe strings, decisions, filtering/version upload,
-deletion confirmation, development-only search routing, Nora denial, strict search response parsing,
-bounded inputs, safe errors, index status, and ID/metadata/provenance/score rendering.
+deletion confirmation, development-only search routing, Nora denial, strict hybrid/citation response
+parsing, bounded inputs, safe errors, embedding/index states, three-score rendering, citation preview,
+and both `not_run` and completed evaluation-summary presentation. Backend integration tests provide
+the measured curated result; UI fixtures verify presentation only.
 
 ## Compose and database checks
 
@@ -66,12 +69,13 @@ uv run alembic check
 DEMO_USER_PASSWORD='<choose a local 12+ character password>' \
   uv run python -m app.scripts.seed_development
 DEMO_USER_PASSWORD='<same password>' uv run python -m app.scripts.seed_development
-uv run alembic downgrade 20260821_0003
+uv run alembic downgrade 20260821_0004
 uv run alembic upgrade head
 DEMO_USER_PASSWORD='<same password>' uv run python -m app.scripts.seed_development
 ```
 
-Confirm the extension and Step 3 tables after the final upgrade:
+Confirm the extension, document tables, embedding columns/constraints, and Step 5 indexes after the
+final upgrade:
 
 ```bash
 cd ..
@@ -81,7 +85,36 @@ docker compose exec -T db psql -U portfolio -d portfolio \
   -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND (tablename LIKE 'document%' OR tablename LIKE 'parsed_%') ORDER BY tablename;"
 docker compose exec -T db psql -U portfolio -d portfolio \
   -c "SELECT indexname FROM pg_indexes WHERE tablename = 'document_chunks' ORDER BY indexname;"
+docker compose exec -T db psql -U portfolio -d portfolio \
+  -c "SELECT column_name, data_type, udt_name, column_default FROM information_schema.columns WHERE table_name = 'document_chunks' AND column_name LIKE 'embedding%' ORDER BY ordinal_position;"
+docker compose exec -T db psql -U portfolio -d portfolio \
+  -c "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'document_chunks'::regclass AND conname LIKE '%embedding%' ORDER BY conname;"
 ```
+
+The final index list must include `ix_document_chunks_embedding_status` and the HNSW
+`ix_document_chunks_embedding_cosine`. Downgrade to `0004` must remove the six embedding fields,
+constraints, and indexes without removing the Step 4 chunk/search schema; re-upgrade must restore
+them. Existing rows should have `embedding_status = 'PENDING'` after the upgrade.
+
+## Live Ollama provider check
+
+This check is separate from automated tests. Configure `.env` with the Step 5 values in the root
+README. Start Ollama in one terminal (or use the running desktop service):
+
+```bash
+ollama serve
+```
+
+In another terminal, make the exact fixed model available and inspect it:
+
+```bash
+ollama pull nomic-embed-text:v1.5
+ollama list
+```
+
+Then start the backend with `EMBEDDING_PROVIDER=ollama`. A non-loopback, HTTPS, credential-bearing,
+query-bearing, or fragment-bearing `OLLAMA_BASE_URL` must fail settings validation. Do not use the
+fake provider to claim live-model retrieval quality.
 
 ## Live smoke test
 
@@ -132,10 +165,13 @@ present in that user's Finance, Legal, or Shared sources. Record returned docume
 - Lina: Atlas Legal + Shared only.
 - Nora: no search navigation; direct UI navigation returns home and direct API access is HTTP 403.
 
-Confirm every result shows version/chunk/document IDs, score, copied ACL metadata, and either PDF page
-or spreadsheet sheet/row/cell provenance. Approve a new version and confirm only its chunks remain
-active. Delete it and confirm search returns no chunks from that document immediately. The browser
-must never display a candidate outside the server-returned result list.
+Confirm every result shows version/chunk/document IDs, keyword/vector/final scores, copied ACL
+metadata, citation excerpt/title/version, and either PDF page or spreadsheet sheet/row/cell
+provenance. Citation IDs, excerpt, version, and location must equal the enclosing result. Approve a
+new version and confirm only its READY chunks remain active while old rows are STALE with cleared
+vectors. Reject another candidate and confirm it creates no eligible chunks. Delete the document and
+confirm search returns no chunks from it immediately. The browser must never display a candidate
+outside the server-returned result list.
 
 API form for a deterministic smoke search:
 
@@ -145,6 +181,49 @@ curl --fail-with-body -X POST http://127.0.0.1:8000/api/development/authorized-s
   -H 'Content-Type: application/json' \
   -d '{"query":"synthetic","top_k":20}'
 ```
+
+The response must identify `nomic-embed-text:v1.5`, 768 dimensions, embedding counts, and the
+separate scores. The current backend must report:
+
+```json
+{"status":"not_run"}
+```
+
+for `evaluation_summary`; do not record a Recall@5 result until a real curated dataset is added and
+executed.
+
+## Existing-chunk reindex smoke test
+
+Migration `0005` leaves pre-existing Step 4 chunks `PENDING`, and hybrid search excludes them. Sign
+in as Nora, capture her bearer token without logging or committing it, and run:
+
+```bash
+curl --fail-with-body -X POST http://127.0.0.1:8000/api/development/reindex-embeddings \
+  -H "Authorization: Bearer $NORA_ACCESS_TOKEN"
+```
+
+Repeat until `processed_chunk_count` is zero; each call processes at most
+`EMBEDDING_MAX_CHUNKS`. Then inspect only safe operational metadata:
+
+```bash
+docker compose exec -T db psql -U portfolio -d portfolio \
+  -c "SELECT embedding_status, count(*) FROM document_chunks GROUP BY embedding_status ORDER BY embedding_status;"
+docker compose exec -T db psql -U portfolio -d portfolio \
+  -c "SELECT count(*) AS invalid_ready_rows FROM document_chunks WHERE embedding_status = 'READY' AND (embedding IS NULL OR embedding_dimensions IS DISTINCT FROM 768 OR embedding_model_name IS DISTINCT FROM 'nomic-embed-text' OR embedding_model_version IS DISTINCT FROM 'v1.5' OR embedding_chunk_hash IS DISTINCT FROM content_hash);"
+```
+
+The invalid READY count must be zero. Repeat the reindex request once more and expect zero processed
+rows. Alice's token must receive HTTP 403. A pending row whose copied ACL no longer equals its
+authoritative document/department must remain unprocessed. Search as the appropriate query user
+before and after the backfill: the pending row is absent before and eligible after.
+
+## Curated retrieval gate
+
+`app/retrieval/evaluation.py` contains checked-in synthetic ground-truth cases. Exact curated queries
+produce a completed summary derived from actual authorized top-five candidates; the integration
+gate records Recall@5 `1.0`, one expected hit, and zero authorization leaks for the exercised PDF
+case. Unit tests cover all configured cases and scope-mismatch counting. Ad hoc queries return
+`not_run`. The current evidence does not justify adding a reranker.
 
 Use an API client to add forged tenant, user, role, department, and company fields to login. The body
 must fail with safe `validation_error`. Add the same values as `/api/auth/me` query parameters or
@@ -169,3 +248,13 @@ must return `invalid_session`.
 - Preview returns `preview_unavailable`: poll the ingestion job and inspect its safe terminal status.
 - Admin routes return 403/404: confirm the current database `MANAGE_UPLOADS` grant for the exact
   workspace/company. Do not infer authority from the UI or JWT.
+- Approval/search/reindex returns `embedding_unavailable`: confirm the loopback Ollama service and
+  exact `nomic-embed-text:v1.5` model, then check only safe request IDs and metadata-only logs. Do not
+  log provider bodies, query text, vectors, or document chunks.
+- Search returns no result for migrated documents: inspect authorized embedding status counts; run
+  the bounded Nora reindex flow until it reports zero. Do not make pending rows searchable by
+  weakening status, model, hash, ACL, or lifecycle predicates.
+- Search returns HTTP 503 while keyword data exists: the implementation intentionally fails closed
+  when query embedding is unavailable; it has no keyword-only fallback.
+- Evaluation displays `Not run`: this is the current expected backend state, not a UI failure. The
+  curated evaluation acceptance criterion remains open.

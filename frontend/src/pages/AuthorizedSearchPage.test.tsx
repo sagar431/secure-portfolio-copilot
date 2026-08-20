@@ -104,11 +104,13 @@ describe('AuthorizedSearchPage', () => {
         expect.any(AbortSignal),
       ),
     )
-    expect(screen.getByText('chunk-finance-1')).toBeInTheDocument()
-    expect(screen.getByText('document-finance-1')).toBeInTheDocument()
-    expect(screen.getByText('version-finance-2')).toBeInTheDocument()
-    expect(screen.getByText('0.8754')).toBeInTheDocument()
-    expect(screen.getByText('orion-finance.xlsx')).toBeInTheDocument()
+    expect(screen.getAllByText('chunk-finance-1')).toHaveLength(2)
+    expect(screen.getAllByText('document-finance-1')).toHaveLength(2)
+    expect(screen.getAllByText('version-finance-2')).toHaveLength(2)
+    expect(screen.getByText('0.8125')).toBeInTheDocument()
+    expect(screen.getByText('0.9375')).toBeInTheDocument()
+    expect(screen.getByText('0.8750')).toBeInTheDocument()
+    expect(screen.getAllByText('orion-finance.xlsx')).toHaveLength(2)
     expect(screen.getByText(/financial report/i)).toBeInTheDocument()
     expect(screen.getByText('Summary')).toBeInTheDocument()
     expect(screen.getByText('4–8')).toBeInTheDocument()
@@ -119,6 +121,10 @@ describe('AuthorizedSearchPage', () => {
       ),
     ).toBeInTheDocument()
     expect(document.querySelector('script')).toBeNull()
+    expect(screen.getByText('Embeddings ready')).toBeInTheDocument()
+    expect(screen.getByText(/nomic-embed-text:v1.5/)).toBeInTheDocument()
+    expect(screen.getByText('87.5%')).toBeInTheDocument()
+    expect(screen.getByText('No authorization leaks')).toBeInTheDocument()
   })
 
   it('shows loading and then an indexing-aware empty state', async () => {
@@ -138,7 +144,7 @@ describe('AuthorizedSearchPage', () => {
     submitSearch()
 
     expect(screen.getByRole('status')).toHaveTextContent(
-      'Searching the authorized index',
+      'Searching the authorized hybrid index',
     )
     expect(screen.getByLabelText('Query')).toBeDisabled()
 
@@ -151,6 +157,12 @@ describe('AuthorizedSearchPage', () => {
           status: 'indexing',
           active_chunk_count: 0,
           indexed_document_count: 0,
+          embedding: {
+            ...authorizedSearchData.indexing.embedding,
+            status: 'indexing',
+            embedded_chunk_count: 0,
+            pending_chunk_count: 42,
+          },
         },
         results: [],
       },
@@ -165,10 +177,44 @@ describe('AuthorizedSearchPage', () => {
     ).toBeInTheDocument()
   })
 
+  it('shows safe degraded embedding and not-run evaluation states', async () => {
+    vi.mocked(searchApi.searchAuthorizedDocuments).mockResolvedValueOnce({
+      data: {
+        ...authorizedSearchData,
+        status: 'degraded',
+        result_count: 0,
+        indexing: {
+          ...authorizedSearchData.indexing,
+          status: 'degraded',
+          embedding: {
+            ...authorizedSearchData.indexing.embedding,
+            status: 'unavailable',
+            embedded_chunk_count: 0,
+            pending_chunk_count: 42,
+          },
+        },
+        evaluation_summary: { status: 'not_run' },
+        results: [],
+      },
+      request_id: 'degraded-request',
+    })
+    renderPage()
+    submitSearch()
+
+    expect(
+      await screen.findByText(/Hybrid retrieval is temporarily degraded/),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Embeddings unavailable')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Not run' })).toBeInTheDocument()
+    expect(
+      screen.getByText(/No aggregate evaluation is available/),
+    ).toBeInTheDocument()
+  })
+
   it('shows only the safe denial and request ID and clears previous results', async () => {
     renderPage()
     submitSearch()
-    expect(await screen.findByText('chunk-finance-1')).toBeInTheDocument()
+    expect(await screen.findAllByText('chunk-finance-1')).toHaveLength(2)
 
     vi.mocked(searchApi.searchAuthorizedDocuments).mockRejectedValueOnce(
       new ApiError(
@@ -186,6 +232,21 @@ describe('AuthorizedSearchPage', () => {
     expect(screen.queryByText('chunk-finance-1')).not.toBeInTheDocument()
   })
 
+  it('does not expose unexpected client error details', async () => {
+    vi.mocked(searchApi.searchAuthorizedDocuments).mockRejectedValueOnce(
+      new Error('provider stack and sensitive diagnostics'),
+    )
+    renderPage()
+    submitSearch()
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Authorized search could not be completed. Try again.',
+    )
+    expect(
+      screen.queryByText(/provider stack and sensitive diagnostics/),
+    ).not.toBeInTheDocument()
+  })
+
   it('rejects a blank query in the form without calling the API', () => {
     renderPage()
     fireEvent.submit(
@@ -201,7 +262,7 @@ describe('AuthorizedSearchPage', () => {
   it('labels every metadata and provenance field accessibly', async () => {
     renderPage()
     submitSearch()
-    const result = (await screen.findByText('chunk-finance-1')).closest(
+    const result = (await screen.findAllByText('chunk-finance-1'))[0].closest(
       'article',
     )
     if (!result) {
@@ -209,7 +270,8 @@ describe('AuthorizedSearchPage', () => {
     }
     expect(within(result).getByText('Version ID')).toBeInTheDocument()
     expect(within(result).getByText('Classification')).toBeInTheDocument()
-    expect(within(result).getByText('Source provenance')).toBeInTheDocument()
+    expect(within(result).getByText('Citation preview')).toBeInTheDocument()
+    expect(within(result).getByText('Citation version ID')).toBeInTheDocument()
     expect(within(result).getByText('Cells')).toBeInTheDocument()
   })
 })

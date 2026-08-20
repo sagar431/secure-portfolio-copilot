@@ -28,7 +28,7 @@ function errorMessage(error: unknown) {
 }
 
 function Provenance({ result }: { result: AuthorizedSearchResultData }) {
-  const { source } = result
+  const source = result.citation
   return (
     <dl className="search-provenance">
       <div>
@@ -63,6 +63,56 @@ function Provenance({ result }: { result: AuthorizedSearchResultData }) {
   )
 }
 
+function ScoreBreakdown({ result }: { result: AuthorizedSearchResultData }) {
+  return (
+    <dl className="search-scores" aria-label="Deterministic hybrid scores">
+      <div>
+        <dt>Keyword</dt>
+        <dd>{result.scores.keyword.toFixed(4)}</dd>
+      </div>
+      <div>
+        <dt>Vector</dt>
+        <dd>{result.scores.vector.toFixed(4)}</dd>
+      </div>
+      <div className="search-score-final">
+        <dt>Final</dt>
+        <dd>{result.scores.final.toFixed(4)}</dd>
+      </div>
+    </dl>
+  )
+}
+
+function CitationPreview({ result }: { result: AuthorizedSearchResultData }) {
+  const { citation } = result
+  return (
+    <section className="citation-preview" aria-label="Citation preview">
+      <div className="citation-heading">
+        <div>
+          <p className="eyebrow">Citation preview</p>
+          <h4>{citation.document_title}</h4>
+        </div>
+        <span className="status-badge">Version {citation.version_number}</span>
+      </div>
+      <p className="search-excerpt">{citation.excerpt}</p>
+      <dl className="search-identifiers">
+        <div>
+          <dt>Citation chunk ID</dt>
+          <dd>{citation.chunk_id}</dd>
+        </div>
+        <div>
+          <dt>Citation document ID</dt>
+          <dd>{citation.document_id}</dd>
+        </div>
+        <div>
+          <dt>Citation version ID</dt>
+          <dd>{citation.document_version_id}</dd>
+        </div>
+      </dl>
+      <Provenance result={result} />
+    </section>
+  )
+}
+
 function SearchResult({
   result,
   position,
@@ -77,12 +127,8 @@ function SearchResult({
           <p className="eyebrow">Result {position}</p>
           <h3>{result.document.filename}</h3>
         </div>
-        <p className="search-score">
-          <span>Score</span>
-          <strong>{result.score.toFixed(4)}</strong>
-        </p>
+        <ScoreBreakdown result={result} />
       </div>
-      <p className="search-excerpt">{result.excerpt}</p>
       <dl className="search-identifiers">
         <div>
           <dt>Chunk ID</dt>
@@ -135,17 +181,78 @@ function SearchResult({
           <dd>{result.document.reporting_period ?? 'Not specified'}</dd>
         </div>
       </dl>
-      <div className="search-source">
-        <h4>Source provenance</h4>
-        <Provenance result={result} />
-      </div>
+      <CitationPreview result={result} />
     </article>
+  )
+}
+
+function EvaluationSummary({ data }: { data: AuthorizedSearchData }) {
+  const summary = data.evaluation_summary
+  if (summary.status === 'not_run') {
+    return (
+      <aside className="evaluation-summary evaluation-summary--not-run">
+        <div>
+          <p className="eyebrow">Curated retrieval evaluation</p>
+          <h3>Not run</h3>
+        </div>
+        <p>
+          No aggregate evaluation is available. Search results remain scoped to
+          this authenticated request.
+        </p>
+      </aside>
+    )
+  }
+  return (
+    <aside className="evaluation-summary">
+      <div className="evaluation-heading">
+        <div>
+          <p className="eyebrow">Curated retrieval evaluation</p>
+          <h3>{summary.dataset_name}</h3>
+        </div>
+        <span
+          className={`status-badge ${
+            summary.authorization_leak_count === 0
+              ? 'status-badge--ready'
+              : 'status-badge--degraded'
+          }`}
+        >
+          {summary.authorization_leak_count === 0
+            ? 'No authorization leaks'
+            : 'Authorization check failed'}
+        </span>
+      </div>
+      <dl className="evaluation-metrics">
+        <div>
+          <dt>Recall@5</dt>
+          <dd>{(summary.recall_at_5 * 100).toFixed(1)}%</dd>
+        </div>
+        <div>
+          <dt>Curated queries</dt>
+          <dd>{summary.curated_query_count}</dd>
+        </div>
+        <div>
+          <dt>Expected top-5 hits</dt>
+          <dd>{summary.expected_top_5_hits}</dd>
+        </div>
+        <div>
+          <dt>Authorization leaks</dt>
+          <dd>{summary.authorization_leak_count}</dd>
+        </div>
+      </dl>
+    </aside>
   )
 }
 
 function SearchOutcome({ data }: { data: AuthorizedSearchData }) {
   const isIndexing =
-    data.status === 'indexing' || data.indexing.status === 'indexing'
+    data.status === 'indexing' ||
+    data.indexing.status === 'indexing' ||
+    data.indexing.embedding.status === 'indexing'
+  const isDegraded =
+    data.status === 'degraded' ||
+    data.indexing.status === 'degraded' ||
+    data.indexing.embedding.status === 'degraded' ||
+    data.indexing.embedding.status === 'unavailable'
   return (
     <section className="search-results" aria-labelledby="search-results-title">
       <div className="section-heading">
@@ -168,12 +275,32 @@ function SearchOutcome({ data }: { data: AuthorizedSearchData }) {
             {data.indexing.active_chunk_count} active chunks across{' '}
             {data.indexing.indexed_document_count} documents
           </small>
+          <span
+            className={`status-badge status-badge--${data.indexing.embedding.status}`}
+          >
+            Embeddings {data.indexing.embedding.status}
+          </span>
+          <small>
+            {data.indexing.embedding.embedded_chunk_count} embedded ·{' '}
+            {data.indexing.embedding.pending_chunk_count} pending ·{' '}
+            {data.indexing.embedding.failed_chunk_count} failed
+          </small>
+          <small>
+            {data.indexing.embedding.model} ·{' '}
+            {data.indexing.embedding.dimensions} dimensions
+          </small>
         </div>
       </div>
       {isIndexing ? (
         <div className="indexing-state" role="status">
           Indexing is still in progress. Results include only chunks currently
           active and authorized by the server.
+        </div>
+      ) : null}
+      {isDegraded ? (
+        <div className="degraded-state" role="status">
+          Hybrid retrieval is temporarily degraded. Only the safe, authorized
+          results returned by the server are shown.
         </div>
       ) : null}
       {data.results.length === 0 ? (
@@ -192,6 +319,7 @@ function SearchOutcome({ data }: { data: AuthorizedSearchData }) {
           ))}
         </div>
       )}
+      <EvaluationSummary data={data} />
     </section>
   )
 }
@@ -264,15 +392,16 @@ export function AuthorizedSearchPage() {
           <h1>Authorized document search</h1>
           <p className="hero-copy">
             Search only approved, active chunks inside your server-derived
-            authorization scope. The browser renders the server response as-is
-            and does not filter candidate documents.
+            authorization scope. Inspect deterministic keyword, vector, and
+            final scores with citation provenance. The browser renders the
+            server response as-is and does not filter candidate documents.
           </p>
         </div>
         <aside className="security-note">
           <strong>Backend-enforced boundary</strong>
           <span>
             Tenant, company, department, visibility, approval, deletion, and
-            active-version checks run before results leave the repository.
+            active-version checks run before vector ranking or top-k selection.
           </span>
         </aside>
       </header>
@@ -283,10 +412,14 @@ export function AuthorizedSearchPage() {
 
       <section className="search-card" aria-labelledby="search-form-title">
         <div>
-          <p className="eyebrow">Deterministic keyword retrieval</p>
+          <p className="eyebrow">Deterministic hybrid retrieval</p>
           <h2 id="search-form-title">Search approved documents</h2>
         </div>
-        <form className="search-form" onSubmit={(event) => void submit(event)}>
+        <form
+          className="search-form"
+          aria-busy={loading}
+          onSubmit={(event) => void submit(event)}
+        >
           <label>
             Query
             <input
@@ -330,8 +463,8 @@ export function AuthorizedSearchPage() {
           </button>
         </form>
         {loading ? (
-          <div className="search-loading" role="status">
-            Searching the authorized index…
+          <div className="search-loading" role="status" aria-live="polite">
+            Searching the authorized hybrid index…
           </div>
         ) : null}
         {error ? (

@@ -5,6 +5,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     BigInteger,
@@ -321,6 +322,17 @@ class DocumentChunk(TimestampMixin, Base):
             name="ck_document_chunks_content_hash_length",
         ),
         CheckConstraint(
+            "embedding_status IN ('PENDING', 'READY', 'FAILED', 'STALE')",
+            name="ck_document_chunks_embedding_status",
+        ),
+        CheckConstraint(
+            "(embedding_status = 'READY' AND embedding IS NOT NULL "
+            "AND embedding_model_name IS NOT NULL AND embedding_model_version IS NOT NULL "
+            "AND embedding_dimensions = 768 AND embedding_chunk_hash = content_hash) OR "
+            "(embedding_status <> 'READY' AND embedding IS NULL)",
+            name="ck_document_chunks_embedding_ready",
+        ),
+        CheckConstraint(
             "(source_type = 'pdf' AND page_number IS NOT NULL "
             "AND sheet_name IS NULL AND row_start IS NULL AND row_end IS NULL "
             "AND cell_start IS NULL AND cell_end IS NULL) OR "
@@ -345,6 +357,12 @@ class DocumentChunk(TimestampMixin, Base):
             "version_status",
         ),
         Index("ix_document_chunks_search_vector", "search_vector", postgresql_using="gin"),
+        Index(
+            "ix_document_chunks_embedding_cosine",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -377,6 +395,14 @@ class DocumentChunk(TimestampMixin, Base):
     cell_end: Mapped[str | None] = mapped_column(String(24))
     content: Mapped[str] = mapped_column(Text, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(768))
+    embedding_model_name: Mapped[str | None] = mapped_column(String(128))
+    embedding_model_version: Mapped[str | None] = mapped_column(String(64))
+    embedding_dimensions: Mapped[int | None] = mapped_column(Integer)
+    embedding_chunk_hash: Mapped[str | None] = mapped_column(String(64))
+    embedding_status: Mapped[str] = mapped_column(
+        String(16), default="PENDING", nullable=False, index=True
+    )
     search_vector: Mapped[object] = mapped_column(
         TSVECTOR,
         Computed("to_tsvector('simple', coalesce(content, ''))", persisted=True),

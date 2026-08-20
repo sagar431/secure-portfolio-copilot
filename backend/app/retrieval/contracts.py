@@ -9,7 +9,9 @@ class SearchCandidate:
     document_version_id: UUID
     version_number: int
     excerpt: str
-    score: float
+    keyword_score: float
+    vector_score: float
+    final_score: float
     page_number: int | None
     sheet_name: str | None
     row_start: int | None
@@ -31,3 +33,6 @@ class SearchCandidate:
 class AuthorizedIndexStatus:
     active_chunk_count: int
     indexed_document_count: int
+    embedded_chunk_count: int
+    pending_chunk_count: int
+    failed_chunk_count: int

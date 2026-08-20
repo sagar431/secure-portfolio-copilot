@@ -1,3 +1,6 @@
+import asyncio
+import math
+from dataclasses import dataclass
 from typing import Any, cast
 from uuid import UUID
 
@@ -6,6 +9,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chunking import ChunkMetadata, GeneratedChunk, chunk_document
+from app.embeddings.contracts import EmbeddingModel, EmbeddingProvider, EmbeddingProviderError
 from app.ingestion.contracts import (
     FileKind,
     ParsedDocument,
@@ -24,6 +28,50 @@ from app.ingestion.contracts import (
     ParsedSheet as ParsedSheetData,
 )
 from app.models.documents import Document, DocumentChunk, DocumentVersion, IngestionStatus
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddedChunk:
+    chunk: GeneratedChunk
+    embedding: tuple[float, ...]
+
+
+async def embed_generated_chunks(
+    provider: EmbeddingProvider,
+    generated: tuple[GeneratedChunk, ...],
+    *,
+    batch_size: int,
+    max_chunks: int,
+    timeout_seconds: float,
+) -> tuple[EmbeddedChunk, ...]:
+    if not 1 <= batch_size <= 64:
+        raise ValueError("Embedding batch size is invalid.")
+    if len(generated) > max_chunks:
+        raise EmbeddingProviderError("CHUNK_LIMIT_EXCEEDED")
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            await provider.ensure_ready()
+            model = provider.model
+            if model.dimensions != 768:
+                raise EmbeddingProviderError("DIMENSION_MISMATCH")
+            embedded: list[EmbeddedChunk] = []
+            for start in range(0, len(generated), batch_size):
+                batch = generated[start : start + batch_size]
+                vectors = await provider.embed(tuple(item.content for item in batch))
+                if len(vectors) != len(batch):
+                    raise EmbeddingProviderError("INVALID_PROVIDER_RESPONSE")
+                for chunk, vector in zip(batch, vectors, strict=True):
+                    if len(vector) != model.dimensions:
+                        raise EmbeddingProviderError("DIMENSION_MISMATCH")
+                    if (
+                        not all(math.isfinite(value) for value in vector)
+                        or math.sqrt(sum(value * value for value in vector)) == 0
+                    ):
+                        raise EmbeddingProviderError("INVALID_VECTOR")
+                    embedded.append(EmbeddedChunk(chunk=chunk, embedding=vector))
+            return tuple(embedded)
+    except TimeoutError:
+        raise EmbeddingProviderError("OPERATION_TIMEOUT", transient=True) from None
 
 
 def _source_kind(version: DocumentVersion) -> FileKind:
@@ -122,7 +170,8 @@ async def replace_active_chunks(
     session: AsyncSession,
     document: Document,
     version: DocumentVersion,
-    generated: tuple[GeneratedChunk, ...],
+    generated: tuple[EmbeddedChunk, ...],
+    model: EmbeddingModel,
 ) -> int:
     """Deactivate old versions and install selected-version chunks in one transaction."""
     expected_metadata = (
@@ -142,50 +191,66 @@ async def replace_active_chunks(
         or version.deleted_at is not None
         or any(
             (
-                item.document_id,
-                item.document_version_id,
-                item.tenant_id,
-                item.company_id,
-                item.department,
-                item.visibility,
-                item.classification,
-                item.document_version,
+                item.chunk.document_id,
+                item.chunk.document_version_id,
+                item.chunk.tenant_id,
+                item.chunk.company_id,
+                item.chunk.department,
+                item.chunk.visibility,
+                item.chunk.classification,
+                item.chunk.document_version,
             )
             != expected_metadata
-            or item.version_status != IngestionStatus.APPROVED.value
-            or not item.active
+            or item.chunk.version_status != IngestionStatus.APPROVED.value
+            or not item.chunk.active
             for item in generated
         )
     ):
         raise ValueError("Chunks do not match the current approved document version.")
     result = await session.execute(
-        update(DocumentChunk).where(DocumentChunk.document_id == document.id).values(active=False)
+        update(DocumentChunk)
+        .where(DocumentChunk.document_id == document.id)
+        .values(
+            active=False,
+            embedding=None,
+            embedding_model_name=None,
+            embedding_model_version=None,
+            embedding_dimensions=None,
+            embedding_chunk_hash=None,
+            embedding_status="STALE",
+        )
     )
     session.add_all(
         DocumentChunk(
-            document_id=item.document_id,
-            document_version_id=item.document_version_id,
-            tenant_id=item.tenant_id,
-            company_id=item.company_id,
+            document_id=item.chunk.document_id,
+            document_version_id=item.chunk.document_version_id,
+            tenant_id=item.chunk.tenant_id,
+            company_id=item.chunk.company_id,
             department_id=document.department_id,
-            department=item.department,
-            visibility=item.visibility,
-            classification=item.classification,
-            version_number=item.document_version,
-            version_status=item.version_status,
-            active=item.active,
+            department=item.chunk.department,
+            visibility=item.chunk.visibility,
+            classification=item.chunk.classification,
+            version_number=item.chunk.document_version,
+            version_status=item.chunk.version_status,
+            active=item.chunk.active,
             document_deleted=False,
             version_deleted=False,
-            ordinal=item.ordinal,
-            source_type=item.source_type.value,
-            page_number=item.page_number,
-            sheet_name=item.sheet_name,
-            row_start=item.row_start,
-            row_end=item.row_end,
-            cell_start=item.cell_start,
-            cell_end=item.cell_end,
-            content=item.content,
-            content_hash=item.content_hash,
+            ordinal=item.chunk.ordinal,
+            source_type=item.chunk.source_type.value,
+            page_number=item.chunk.page_number,
+            sheet_name=item.chunk.sheet_name,
+            row_start=item.chunk.row_start,
+            row_end=item.chunk.row_end,
+            cell_start=item.chunk.cell_start,
+            cell_end=item.chunk.cell_end,
+            content=item.chunk.content,
+            content_hash=item.chunk.content_hash,
+            embedding=list(item.embedding),
+            embedding_model_name=model.name,
+            embedding_model_version=model.version,
+            embedding_dimensions=model.dimensions,
+            embedding_chunk_hash=item.chunk.content_hash,
+            embedding_status="READY",
         )
         for item in generated
     )
@@ -205,6 +270,12 @@ async def deactivate_version_chunks(
             active=False,
             version_status=version_status.value,
             version_deleted=version_status == IngestionStatus.DELETED,
+            embedding=None,
+            embedding_model_name=None,
+            embedding_model_version=None,
+            embedding_dimensions=None,
+            embedding_chunk_hash=None,
+            embedding_status="STALE",
         )
     )
     return int(cast(CursorResult[Any], result).rowcount or 0)
@@ -219,6 +290,12 @@ async def deactivate_document_chunks(session: AsyncSession, document_id: UUID) -
             version_status=IngestionStatus.DELETED.value,
             document_deleted=True,
             version_deleted=True,
+            embedding=None,
+            embedding_model_name=None,
+            embedding_model_version=None,
+            embedding_dimensions=None,
+            embedding_chunk_hash=None,
+            embedding_status="STALE",
         )
     )
     return int(cast(CursorResult[Any], result).rowcount or 0)

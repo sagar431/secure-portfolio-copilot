@@ -298,3 +298,135 @@ before the repository is called.
 8. Why does Nora receive 403 even though she can approve uploads?
 9. Which search metadata is audited, and which text is deliberately excluded?
 10. Why is this keyword baseline deterministic retrieval rather than Step 5 hybrid RAG?
+
+## Step 5 — Embeddings, hybrid retrieval, and citations
+
+### What problem this step solves
+
+Keyword matching cannot reliably connect a natural-language query to differently worded evidence.
+Step 5 adds bounded semantic vectors and combines them with the existing deterministic full-text
+signal while preserving the rule that authorization and authoritative lifecycle checks happen
+before any candidate is vector-ranked or limited. It returns inspectable evidence and citations,
+not a generated answer.
+
+### Frontend flow
+
+The development-only authorized-search page still sends only normalized `query` and bounded
+`top_k`. Its strict response validator now requires separate keyword, vector, and final scores; an
+embedding/index status with model, dimensions, and ready/pending/failed counts; and a citation whose
+IDs, excerpt, version, and source location exactly match the result. Invalid or extra response
+fields fail closed instead of rendering.
+
+The page displays the server-derived scope, search and index states, all three scores, document
+metadata, and a citation preview containing the bounded excerpt and PDF page or spreadsheet
+sheet/row/cell range. It renders content as inert React text. Curated synthetic queries show their
+measured top-five hit and authorization-leak counts; ad hoc queries show `not_run`.
+
+### Backend flow
+
+For approval, the ingestion service first loads and locks the manageable version and authorizes the
+exact workspace/company. It performs the legal in-transaction state transition, assigns the current
+approved pointer, generates deterministic chunks, and asks the configured provider to embed them in
+bounded batches. Only after every vector passes dimension, finiteness, non-zero, and cardinality
+checks does the index adapter deactivate prior rows and insert the new rows. The single success
+commit therefore publishes the lifecycle transition, pointer, chunks, vectors, and audit together.
+An embedding failure rolls all approval/replacement changes back and returns a generic 503.
+
+For search, the service denies a caller lacking `QUERY_DOCUMENTS` before it calls the provider. It
+embeds only the query; no candidate document text is sent to the provider during retrieval. The
+repository requires the immutable `AuthorizationScope` and builds an authorization/lifecycle CTE.
+PostgreSQL explicitly materializes that filtered CTE before applying cosine distance, hybrid
+scoring, ordering, and `top_k`.
+
+The deterministic formula is:
+
+```text
+keyword = ts_rank_cd / (ts_rank_cd + 1)
+vector  = max(0, 1 - cosine_distance)
+final   = 0.35 * keyword + 0.65 * vector
+order   = final DESC, keyword DESC, chunk_id ASC
+```
+
+There is no keyword-match predicate in the hybrid query, so semantically similar authorized chunks
+may be returned with a zero keyword component. Only `READY` rows for the exact configured
+model/version/dimensions whose embedded hash equals `content_hash` participate.
+
+### Embedding provider and lifecycle
+
+`EmbeddingProvider` exposes immutable model metadata, readiness, and batch embedding. The default
+development adapter is Ollama at an explicit HTTP loopback URL and uses
+`nomic-embed-text:v1.5`/768 dimensions. It checks the local model list and may pull the exact model;
+it never silently substitutes another tag. Transient network/server failures receive one bounded
+retry. The deterministic token-hash fake exists only for automated tests, and the disabled adapter
+fails closed. Production configuration rejects both development providers.
+
+Migration `20260821_0005` adds the vector and its model/hash/status metadata, READY-state checks, a
+status index, and an HNSW cosine index. Existing chunks receive `PENDING`. The development-only
+reindex route selects only bounded `PENDING`/`FAILED`, active, current-approved rows inside an admin
+caller's current `MANAGE_UPLOADS` scope, rechecks copied metadata against authoritative rows, locks
+with `SKIP LOCKED`, and commits successful vectors plus a metadata-only audit. It is called repeatedly
+until `processed_chunk_count` is zero.
+
+Replacement, rejection, and deletion erase stored vectors and model/hash metadata while marking
+affected rows `STALE`. Search also rejoins active tenant/company/document/version rows, so copied
+state or an old vector alone can never restore eligibility.
+
+### Database flow
+
+Migration `0005` provides an HNSW cosine index over `vector(768)`, but the current materialized-CTE
+shape makes no guaranteed query-plan or latency claim. Authorization ordering takes priority: the
+query first creates `authorized_chunks AS MATERIALIZED` from grant-correlated tenant/company/
+department predicates, exact visibility/classification pairs, current approval/deletion state,
+copied-to-authoritative metadata equality, and active tenant/company checks. Vector distance
+references only that CTE.
+
+### Heuristic versus LLM ownership
+
+All implemented Step 5 behavior is deterministic code, PostgreSQL, and a numerical embedding model.
+Embeddings supply a similarity signal but do not authorize, classify, rewrite, rerank, or generate
+text. The 35/65 weights are fixed code, not an LLM choice. The checked-in curated cases verify the
+expected top-five result but are deliberately not presented as a broad quality benchmark.
+
+### MCP tools involved
+
+None. Search and reindex remain direct development/test APIs. MCP and the agent loop are later
+steps.
+
+### Security invariant
+
+Embedding a query must not widen its authority. A chunk may reach similarity scoring only after its
+copied ACL and authoritative current lifecycle match a mandatory database-derived scope. Vectors,
+query text, excerpts, and forbidden candidates do not enter audit metadata or request logs.
+
+### Failure example
+
+Suppose migration `0005` leaves an old approved chunk `PENDING`. Alice's search cannot use that row,
+because hybrid search requires `READY` plus exact model/version/dimension/hash metadata. Alice also
+cannot invoke the admin reindex route. Nora may reindex it only if the current document is in her
+manageable workspace/company scope and all authoritative ACL/lifecycle equality checks still pass.
+If Ollama returns a wrong-sized or zero vector, the operation rolls back and exposes only
+`embedding_unavailable`, without provider output or document content.
+
+### Current limitation
+
+The curated synthetic set is intentionally small and reports per-matched-case Recall@5, not a broad
+aggregate semantic benchmark. Its integration gate reached the expected result with zero scope
+leaks, so Step 5 does not add a reranker. Ad hoc queries remain correctly marked `not_run`.
+
+### Questions Sagar should be able to answer
+
+1. Why is query capability checked before calling the embedding provider?
+2. Why must authorization/lifecycle rows be materialized before vector distance and `top_k`?
+3. What is the exact hybrid scoring formula and deterministic tie-break order?
+4. Which model identity, dimensions, vector properties, and content hash make a chunk eligible?
+5. Why can hybrid search return an authorized result whose keyword score is zero?
+6. What changes atomically when a version is approved, and what is rolled back on provider failure?
+7. How do replacement, rejection, and deletion invalidate embeddings?
+8. Why do existing Step 4 chunks become `PENDING`, and how does the bounded reindex route select
+   them safely?
+9. What prevents Alice from reindexing and prevents Nora from searching?
+10. Why is the deterministic fake suitable for tests but not a production semantic-quality claim?
+11. Which citation fields are checked against the enclosing result by the frontend?
+12. Why do curated queries show a measured result while ad hoc queries say `not_run`?
+13. Why is an embedding model not an LLM authorization, reranking, or answer-generation component?
+14. Why is there no keyword-only fallback when query embedding fails?

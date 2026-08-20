@@ -6,8 +6,10 @@ from uuid import UUID
 import pytest
 from anyio import Path as AsyncPath
 from httpx import AsyncClient, Response
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
+from app.api.routes import documents as document_routes
+from app.embeddings import DeterministicFakeEmbeddingProvider, EmbeddingProviderError
 from app.models.documents import Document, DocumentAuditEvent, DocumentChunk, DocumentVersion
 from app.scripts.seed_development import seed_id
 from tests.conftest import DEMO_PASSWORD, AuthHarness
@@ -184,6 +186,12 @@ async def test_approval_indexes_inherited_pdf_metadata_and_delete_removes_search
         assert all(chunk.document_version_id == version.id for chunk in chunks)
         assert all(chunk.version_number == version.version_number for chunk in chunks)
         assert all(chunk.version_status == "APPROVED" and chunk.active for chunk in chunks)
+        assert all(chunk.embedding_status == "READY" for chunk in chunks)
+        assert all(chunk.embedding is not None and len(chunk.embedding) == 768 for chunk in chunks)
+        assert all(chunk.embedding_model_name == "nomic-embed-text" for chunk in chunks)
+        assert all(chunk.embedding_model_version == "v1.5" for chunk in chunks)
+        assert all(chunk.embedding_dimensions == 768 for chunk in chunks)
+        assert all(chunk.embedding_chunk_hash == chunk.content_hash for chunk in chunks)
         assert all(chunk.page_number is not None and chunk.sheet_name is None for chunk in chunks)
 
     handler = _RecordingHandler()
@@ -201,6 +209,14 @@ async def test_approval_indexes_inherited_pdf_metadata_and_delete_removes_search
     assert searched.status_code == 200, searched.text
     payload = searched.json()["data"]
     assert payload["results"]
+    assert payload["evaluation_summary"] == {
+        "status": "complete",
+        "dataset_name": "step5-synthetic-ground-truth-v1",
+        "curated_query_count": 1,
+        "recall_at_5": 1.0,
+        "expected_top_5_hits": 1,
+        "authorization_leak_count": 0,
+    }
     assert {item["document_id"] for item in payload["results"]} == {str(document_id)}
     assert all(len(item["excerpt"]) <= 500 for item in payload["results"])
     assert all(item["source"]["page_number"] is not None for item in payload["results"])
@@ -268,6 +284,9 @@ async def test_approval_indexes_inherited_pdf_metadata_and_delete_removes_search
         assert all(
             not chunk.active and chunk.document_deleted and chunk.version_deleted
             for chunk in chunks
+        )
+        assert all(
+            chunk.embedding_status == "STALE" and chunk.embedding is None for chunk in chunks
         )
 
 
@@ -376,9 +395,22 @@ async def test_xlsx_version_rejection_and_atomic_replacement_preserve_provenance
         assert not any(
             chunk.active for chunk in chunks if chunk.document_version_id == first_version
         )
+        stale = [chunk for chunk in chunks if chunk.document_version_id == first_version]
+        assert stale and all(
+            chunk.embedding_status == "STALE"
+            and chunk.embedding is None
+            and chunk.embedding_model_name is None
+            and chunk.embedding_model_version is None
+            and chunk.embedding_dimensions is None
+            and chunk.embedding_chunk_hash is None
+            for chunk in stale
+        )
         assert not any(chunk.document_version_id == rejected_version for chunk in chunks)
         active = [chunk for chunk in chunks if chunk.active]
         assert active and {chunk.document_version_id for chunk in active} == {replacement_version}
+        assert all(
+            chunk.embedding_status == "READY" and chunk.embedding is not None for chunk in active
+        )
         assert all(chunk.source_type == "xlsx" and chunk.page_number is None for chunk in active)
         assert all(
             chunk.sheet_name is not None
@@ -477,6 +509,17 @@ async def test_demo_user_search_matrix_and_forged_request_values_fail_closed(
         assert response.status_code == 200, response.text
         data = response.json()["data"]
         assert data["results"]
+        assert data["status"] == "ready"
+        assert data["indexing"]["embedding"]["status"] == "ready"
+        assert data["indexing"]["embedding"]["dimensions"] == 768
+        assert data["evaluation_summary"] == {"status": "not_run"}
+        for item in data["results"]:
+            assert set(item["scores"]) == {"keyword", "vector", "final"}
+            assert all(0 <= score <= 1 for score in item["scores"].values())
+            assert item["citation"]["chunk_id"] == item["chunk_id"]
+            assert item["citation"]["document_id"] == item["document_id"]
+            assert item["citation"]["document_version_id"] == item["document_version_id"]
+            assert item["citation"]["excerpt"] == item["excerpt"]
         assert {item["document"]["tenant_slug"] for item in data["results"]} == {tenant}
         assert {item["document"]["department"] for item in data["results"]} <= departments
         assert {grant["workspace"]["slug"] for grant in data["authorized_scope"]["grants"]} == {
@@ -555,3 +598,278 @@ async def test_query_and_top_k_limits_are_strict_and_normalization_is_bounded(
     assert normalized.status_code == 200
     assert normalized.json()["data"]["query"] == "revenue growth"
     assert normalized.json()["data"]["top_k"] == 1
+
+
+@pytest.mark.asyncio
+async def test_bounded_reindex_backfills_only_manageable_current_approved_chunks(
+    auth_harness: AuthHarness,
+) -> None:
+    nora = await _login(auth_harness.client, "nora@example.com")
+    alice = await _login(auth_harness.client, "alice@example.com")
+    document = await _upload_and_approve(
+        auth_harness.client,
+        nora,
+        relative_path="orion/finance/Orion_FY2025_Board_Pack.pdf",
+        media_type="application/pdf",
+        metadata=_metadata(
+            workspace="orion",
+            department="finance",
+            document_type="FINANCIAL_REPORT",
+            reporting_period="FY2025",
+        ),
+        idempotency_key="embedding-backfill-0001",
+    )
+    document_id = UUID(str(document["id"]))
+    async with auth_harness.session_factory() as session:
+        await session.execute(
+            update(DocumentChunk)
+            .where(DocumentChunk.document_id == document_id)
+            .values(
+                embedding=None,
+                embedding_model_name=None,
+                embedding_model_version=None,
+                embedding_dimensions=None,
+                embedding_chunk_hash=None,
+                embedding_status="PENDING",
+            )
+        )
+        await session.commit()
+        pending_count = len(
+            tuple(
+                (
+                    await session.execute(
+                        select(DocumentChunk.id).where(DocumentChunk.document_id == document_id)
+                    )
+                ).scalars()
+            )
+        )
+
+    before = await _search(auth_harness.client, alice, "Margin Compression")
+    assert before.status_code == 200
+    assert before.json()["data"]["results"] == []
+    denied = await auth_harness.client.post(
+        "/api/development/reindex-embeddings",
+        headers={"Authorization": f"Bearer {alice}"},
+    )
+    assert denied.status_code == 403
+    auth_harness.settings.embedding_max_chunks = 1
+    processed = 0
+    for _ in range(pending_count):
+        reindexed = await auth_harness.client.post(
+            "/api/development/reindex-embeddings",
+            headers={"Authorization": f"Bearer {nora}"},
+        )
+        assert reindexed.status_code == 200, reindexed.text
+        assert reindexed.json()["data"]["processed_chunk_count"] == 1
+        processed += 1
+    assert processed == pending_count
+    after = await _search(auth_harness.client, alice, "Margin Compression")
+    assert after.status_code == 200
+    assert after.json()["data"]["results"]
+    async with auth_harness.session_factory() as session:
+        rows = tuple(
+            (
+                await session.execute(
+                    select(DocumentChunk).where(DocumentChunk.document_id == document_id)
+                )
+            ).scalars()
+        )
+        assert rows and all(
+            row.embedding_status == "READY"
+            and row.embedding is not None
+            and row.embedding_model_name == "nomic-embed-text"
+            and row.embedding_model_version == "v1.5"
+            and row.embedding_dimensions == 768
+            and row.embedding_chunk_hash == row.content_hash
+            for row in rows
+        )
+
+
+@pytest.mark.asyncio
+async def test_corrupted_copied_acl_is_excluded_from_search_and_reindex(
+    auth_harness: AuthHarness,
+) -> None:
+    nora = await _login(auth_harness.client, "nora@example.com")
+    alice = await _login(auth_harness.client, "alice@example.com")
+    document = await _upload_and_approve(
+        auth_harness.client,
+        nora,
+        relative_path="orion/legal/Orion_Series_C_Investment_Agreement.pdf",
+        media_type="application/pdf",
+        metadata=_metadata(
+            workspace="orion",
+            department="legal",
+            document_type="LEGAL_AGREEMENT",
+            reporting_period="2026",
+        ),
+        idempotency_key="embedding-corrupt-acl-0001",
+    )
+    document_id = UUID(str(document["id"]))
+    async with auth_harness.session_factory() as session:
+        await session.execute(
+            update(DocumentChunk)
+            .where(DocumentChunk.document_id == document_id)
+            .values(
+                department="finance",
+                visibility="DEPARTMENT_PRIVATE",
+                classification="FINANCE_ONLY",
+                embedding=None,
+                embedding_model_name=None,
+                embedding_model_version=None,
+                embedding_dimensions=None,
+                embedding_chunk_hash=None,
+                embedding_status="PENDING",
+            )
+        )
+        await session.commit()
+
+    searched = await _search(auth_harness.client, alice, "investment agreement")
+    assert searched.status_code == 200
+    assert searched.json()["data"]["results"] == []
+    reindexed = await auth_harness.client.post(
+        "/api/development/reindex-embeddings",
+        headers={"Authorization": f"Bearer {nora}"},
+    )
+    assert reindexed.status_code == 200
+    assert reindexed.json()["data"]["processed_chunk_count"] == 0
+    async with auth_harness.session_factory() as session:
+        statuses = tuple(
+            (
+                await session.execute(
+                    select(DocumentChunk.embedding_status).where(
+                        DocumentChunk.document_id == document_id
+                    )
+                )
+            ).scalars()
+        )
+        assert statuses and set(statuses) == {"PENDING"}
+
+
+@pytest.mark.asyncio
+async def test_model_name_and_tag_mismatch_are_excluded_from_hybrid_ranking(
+    auth_harness: AuthHarness,
+) -> None:
+    nora = await _login(auth_harness.client, "nora@example.com")
+    alice = await _login(auth_harness.client, "alice@example.com")
+    document = await _upload_and_approve(
+        auth_harness.client,
+        nora,
+        relative_path="orion/finance/Orion_FY2025_Board_Pack.pdf",
+        media_type="application/pdf",
+        metadata=_metadata(
+            workspace="orion",
+            department="finance",
+            document_type="FINANCIAL_REPORT",
+            reporting_period="FY2025",
+        ),
+        idempotency_key="embedding-model-mismatch-0001",
+    )
+    document_id = UUID(str(document["id"]))
+    async with auth_harness.session_factory() as session:
+        chunks = tuple(
+            (
+                await session.execute(
+                    select(DocumentChunk)
+                    .where(DocumentChunk.document_id == document_id)
+                    .order_by(DocumentChunk.ordinal)
+                    .limit(2)
+                )
+            ).scalars()
+        )
+        assert len(chunks) == 2
+        chunks[0].embedding_model_name = "wrong-model"
+        chunks[1].embedding_model_version = "wrong-tag"
+        mismatched_ids = {str(item.id) for item in chunks}
+        await session.commit()
+
+    searched = await _search(auth_harness.client, alice, "synthetic")
+    assert searched.status_code == 200
+    assert mismatched_ids.isdisjoint(
+        {item["chunk_id"] for item in searched.json()["data"]["results"]}
+    )
+
+
+class _FailingEmbeddingProvider(DeterministicFakeEmbeddingProvider):
+    async def embed(self, texts: tuple[str, ...]) -> tuple[tuple[float, ...], ...]:
+        raise EmbeddingProviderError("secret query /internal/path", transient=True)
+
+
+@pytest.mark.asyncio
+async def test_failed_approval_rolls_back_and_retry_is_idempotent(
+    auth_harness: AuthHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nora = await _login(auth_harness.client, "nora@example.com")
+    uploaded = await _upload(
+        auth_harness.client,
+        nora,
+        relative_path="orion/finance/Orion_FY2025_Board_Pack.pdf",
+        media_type="application/pdf",
+        metadata=_metadata(
+            workspace="orion",
+            department="finance",
+            document_type="FINANCIAL_REPORT",
+            reporting_period="FY2025",
+        ),
+        idempotency_key="embedding-retry-approval-0001",
+    )
+    assert uploaded.status_code == 201
+    document = uploaded.json()["data"]["document"]
+    document_id = UUID(document["id"])
+    version_id = UUID(document["version"]["id"])
+    monkeypatch.setattr(
+        document_routes,
+        "create_embedding_provider",
+        lambda settings: _FailingEmbeddingProvider(),
+    )
+    failed = await _approve(auth_harness.client, nora, document)
+    assert failed.status_code == 503
+    assert failed.json()["error"]["code"] == "embedding_unavailable"
+    async with auth_harness.session_factory() as session:
+        stored_document = await session.get(Document, document_id)
+        stored_version = await session.get(DocumentVersion, version_id)
+        chunk_count = int(
+            (
+                await session.execute(
+                    select(func.count())
+                    .select_from(DocumentChunk)
+                    .where(DocumentChunk.document_version_id == version_id)
+                )
+            ).scalar_one()
+        )
+        failure_event = (
+            (
+                await session.execute(
+                    select(DocumentAuditEvent)
+                    .where(DocumentAuditEvent.event_type == "document_chunk_index")
+                    .order_by(DocumentAuditEvent.created_at.desc())
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .one()
+        )
+        assert stored_document is not None and stored_document.current_approved_version_id is None
+        assert stored_version is not None and stored_version.status == "PREVIEW_READY"
+        assert chunk_count == 0
+        assert failure_event.reason_code == "UNKNOWN_PROVIDER_ERROR"
+        assert "secret" not in json.dumps(failure_event.event_metadata)
+
+    monkeypatch.setattr(
+        document_routes,
+        "create_embedding_provider",
+        lambda settings: DeterministicFakeEmbeddingProvider(),
+    )
+    retried = await _approve(auth_harness.client, nora, document)
+    assert retried.status_code == 200
+    async with auth_harness.session_factory() as session:
+        ready = tuple(
+            (
+                await session.execute(
+                    select(DocumentChunk).where(DocumentChunk.document_version_id == version_id)
+                )
+            ).scalars()
+        )
+        assert ready and all(
+            item.active and item.embedding_status == "READY" and item.embedding is not None
+            for item in ready
+        )

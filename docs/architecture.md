@@ -1,10 +1,10 @@
-# Step 4 Architecture
+# Step 5 Architecture
 
 ## Scope
 
 This document describes the Step 1 foundation, Step 2 identity/authorization, Step 3 governed
-synthetic-document ingestion, and Step 4 secure chunk storage and deterministic keyword retrieval.
-Embeddings and all later capabilities remain absent.
+synthetic-document ingestion, Step 4 secure chunk storage, and Step 5 approved-version embeddings,
+authorization-first hybrid retrieval, citation DTOs, and curated top-five evaluation.
 
 ```mermaid
 flowchart LR
@@ -21,11 +21,14 @@ flowchart LR
     Parser --> ObjectStore[Generated-key local object storage]
     Parser --> Parsed[(Versioned parsed provenance)]
     Ingestion -->|approve in one transaction| Chunker[Deterministic chunker]
-    Chunker --> Chunks[(ACL-copied document chunks)]
+    Chunker --> Embedder[Bounded EmbeddingProvider]
+    Embedder --> Chunks[(ACL-copied chunks + pgvector)]
+    Embedder --> Ollama[Loopback Ollama development adapter]
     Browser -->|development search| SearchAPI[Authorized search API]
     SearchAPI --> Scope
-    Scope --> Search[Scoped PostgreSQL full-text repository]
+    Scope --> Search[Authorization-first hybrid repository]
     Search --> Chunks
+    Search -->|query text only| Embedder
     Identity --> SQLAlchemy[SQLAlchemy async engine]
     RequestID --> Route[Typed health/readiness route]
     Route -->|/ready only| SQLAlchemy
@@ -116,9 +119,13 @@ state while child upload, library, preview, badge, and deletion components remai
 
 In development builds, `/development/search` mounts only when a current grant contains
 `QUERY_DOCUMENTS`. It posts a normalized bounded query and `top_k` to the development-only backend
-endpoint. The page displays the active scope and renders only returned IDs, bounded excerpts,
-metadata, provenance, and scores. It performs no client-side authorization filtering. Production
-frontend builds omit the route, navigation, page, and API module.
+endpoint. The page displays active scope; embedding/index state and counts; keyword, vector, and
+final scores; IDs; metadata; and a citation preview with bounded excerpt and provenance. A strict
+client validator requires citation/result identity and source equality and rejects unexpected
+response fields. It performs no client-side authorization filtering and renders evidence as inert
+text. Checked-in curated queries return measured Recall@5 and authorization-leak counts; ad hoc
+queries return `not_run`. Production frontend builds omit the route, navigation, page, and API
+module.
 
 ## Document ingestion path
 
@@ -134,16 +141,19 @@ frontend builds omit the route, navigation, page, and API module.
    `formula_like` flag; it never executes formulas.
 5. The service writes parsed provenance and advances the version/job together to `PREVIEW_READY`.
    Version-addressed preview is then available; approval or rejection is legal only from that state.
-   Approval locks the version row, transitions it to `APPROVED`, deterministically chunks parsed
-   content, deactivates old-version chunks, installs new active chunks, updates the current-approved
-   pointer, writes metadata-only audit events, and commits once.
+   Approval locks the version row, transitions it to `APPROVED`, sets the current-approved pointer,
+   deterministically chunks parsed content, and embeds every chunk in bounded batches. After all
+   vectors validate, it deactivates old-version chunks and their vectors as `STALE`, installs new
+   `READY` chunks, writes metadata-only audit events, and commits once. Chunking or embedding failure
+   rolls the lifecycle transition, pointer, and replacement back before a generic error is returned.
 6. Initial uploads deduplicate on checksum plus canonical scope metadata. A separate endpoint creates
    explicit versions. Actor/idempotency-key plus request fingerprint makes exact retries stable and
    conflicting reuse fail safely.
 7. Rejection creates no chunks and deactivates any matching rows defensively. Deletion marks the
    logical document and every version `DELETED`, clears the approved pointer, deactivates every
-   chunk, commits immediate unavailability, and then performs best-effort object cleanup with
-   audited failures.
+   chunk, clears vector/model/hash metadata, marks the rows `STALE`, commits immediate
+   unavailability, and then performs best-effort object cleanup with audited failures. Rejection
+   performs the same vector invalidation for any matching version rows.
 
 ```mermaid
 stateDiagram-v2
@@ -172,26 +182,78 @@ the application. Its initial reversible migration enables pgvector; SQLAlchemy m
 Step 2 adds tenants, companies, departments, roles, users, memberships, and three dimension-specific
 grant tables. Step 3 adds logical documents, versions, ingestion jobs, parsed pages, parsed sheets,
 rows, cells, and document audit events. Step 4 adds `document_chunks`, copied ACL/lifecycle columns,
-a generated `TSVECTOR`, an ACL/lifecycle B-tree index, and a GIN full-text index. The development
-seed writes only synthetic identity rows; documents and chunks are created through governed
-ingestion. `/ready` still executes only `SELECT 1`.
+a generated `TSVECTOR`, an ACL/lifecycle B-tree index, and a GIN full-text index. Migration
+`20260821_0005` adds nullable `vector(768)`, model name/version/dimensions, embedded content hash,
+embedding status, consistency constraints, a status index, and an HNSW cosine index. Its
+`PENDING` server default makes pre-existing Step 4 chunks explicit reindex candidates. The
+development seed writes only synthetic identity rows; documents and chunks are created through
+governed ingestion. `/ready` still executes only `SELECT 1`.
 
-## Authorized search path
+## Embedding provider boundary
+
+`EmbeddingProvider` exposes three operations/data points: immutable model metadata, `ensure_ready`,
+and ordered batch `embed`. The contract is fixed to `nomic-embed-text:v1.5`, 768 dimensions.
+
+- The development Ollama adapter accepts only explicit HTTP loopback URLs, disables environment
+  proxy inheritance, checks or pulls the exact model tag, and performs one bounded retry only for
+  transient failures.
+- The deterministic token-hash fake supplies finite non-zero vectors for tests; it is not a semantic
+  quality baseline or production adapter.
+- The disabled provider always fails closed. Production settings require it, and production omits
+  the development routes. Because approval currently embeds synchronously, production approval also
+  fails closed until a separately approved production provider/worker design exists.
+- Batch size is 1–64 (default 16), total chunks per operation default to 512, provider calls default
+  to 30 seconds, and a complete operation defaults to 120 seconds. Cardinality, dimensions,
+  finiteness, and non-zero norm are checked before persistence.
+
+## Authorized hybrid search path
 
 1. FastAPI authenticates the bearer subject and reloads the current database scope.
-2. The service denies users such as Nora who have no `QUERY_DOCUMENTS` capability; no repository
-   search runs on this path.
+2. The service denies users such as Nora who have no `QUERY_DOCUMENTS` capability; neither the
+   embedding provider nor repository runs on this path.
 3. Strict request validation accepts only `query` (1–500 normalized characters) and `top_k` (1–20).
    Identity, tenant, company, department, role, document, version, and scope fields are forbidden.
-4. Every public production retrieval repository method requires `AuthorizationScope` as a mandatory
+4. The configured provider receives only the query and must return one valid 768-dimensional vector.
+   Candidate document text is not sent to the provider during search.
+5. Every public production retrieval repository method requires `AuthorizationScope` as a mandatory
    argument. Grant-correlated SQL predicates bind workspace, company, and allowed departments.
-5. The same SQL statement requires exact visibility/classification pairing, active tenant/company,
-   copied and authoritative approval/deletion state, active chunks, and the document's current
-   approved version before `plainto_tsquery('simple', query)`, rank, order, and limit are applied.
-6. The repository materializes at most 20 rows with a maximum 500-character excerpt. The service
-   returns chunk/document/version IDs, source metadata, page or sheet/row/cell provenance, and score.
-7. The audit event contains actor/request/resource IDs and counts only. Query and document content
-   are absent from audit metadata and logs.
+6. PostgreSQL builds `authorized_chunks AS MATERIALIZED` using exact visibility/classification,
+   active tenant/company, copied-to-authoritative metadata equality, approval/deletion state, active
+   chunks, and the document's current approved version. It also requires `READY`, exact model
+   name/version/dimensions, a non-null vector, and `embedding_chunk_hash = content_hash`.
+7. Only after that CTE is materialized does SQL compute normalized full-text score, bounded cosine
+   similarity, `0.35 * keyword + 0.65 * vector`, deterministic tie-breaks, and `top_k`. Unlike Step
+   4, there is no keyword-match predicate, so an authorized semantic result may have keyword score
+   zero.
+8. The repository materializes at most 20 rows with a maximum 500-character excerpt. The service
+   returns three scores plus a citation containing title, chunk/document/version IDs, version,
+   excerpt, and page or sheet/row/cell provenance.
+9. The audit event contains actor/request/permitted-resource IDs, counts, and `top_k` only. Query,
+   vectors, excerpts, forbidden candidates, and document content are absent from audit metadata and
+   logs.
+
+```mermaid
+flowchart TD
+    Request[Authenticated query + top_k] --> Capability{QUERY_DOCUMENTS?}
+    Capability -->|no| Deny[Generic 403; no provider/repository call]
+    Capability -->|yes| QueryVector[Embed query only]
+    QueryVector --> ScopeSQL[Grant-correlated ACL + authoritative lifecycle SQL]
+    ScopeSQL --> Materialized[(authorized_chunks MATERIALIZED)]
+    Materialized --> Eligible[READY + exact model/dimensions/hash]
+    Eligible --> Scores[Keyword 35% + cosine 65%]
+    Scores --> Limit[Deterministic order + bounded top_k]
+    Limit --> Citation[Bounded result + citation DTO]
+```
+
+## Authorized reindex path
+
+`POST /api/development/reindex-embeddings` exists only in development/test and accepts no body.
+The route first requires at least one database-derived manageable pair. Its query then selects at
+most `EMBEDDING_MAX_CHUNKS` `PENDING`/`FAILED` rows that are active, current, approved, non-deleted,
+inside an admin `MANAGE_UPLOADS` workspace/company grant, and equal to authoritative ACL/lifecycle
+rows. `FOR UPDATE SKIP LOCKED` prevents concurrent workers from claiming the same rows. A successful
+call writes `READY` vectors and a count-only audit; provider failure rolls back and returns a generic
+503. Operators repeat the call until `processed_chunk_count` is zero.
 
 ## Trust boundaries
 
@@ -210,6 +272,16 @@ ingestion. `/ready` still executes only `SELECT 1`.
 - Parser output is untrusted display data and is rendered as React text, never HTML or executable
   spreadsheet content.
 - Chunks inherit authorization metadata; they cannot widen a document's visibility or classification.
+- Embedding creation cannot widen authority. Approval and backfill are reached only after current
+  management authorization; provider output is validated numerical data, never scope input.
 - Search authorization lives in SQL-backed repository code. UI route hiding is only a convenience.
-- Forbidden candidate text is never returned to the service, UI, audit event, or request log.
-- The authorized-search API is registered only for `development` and `test` environments.
+- Authorization and authoritative lifecycle filtering are materialized before cosine distance,
+  ranking, or top-k. Forbidden candidate text is never returned to the service, UI, provider during
+  search, audit event, or request log.
+- Old, rejected, or deleted chunks lose their vectors and become `STALE`; pending/failed/wrong-model/
+  wrong-hash chunks are ineligible.
+- Search does not downgrade to keyword-only behavior on provider failure; it returns a generic 503.
+- The authorized-search and embedding-reindex APIs are registered only for `development` and `test`
+  environments.
+- The small curated evaluation is measured; no broad benchmark, reranker, answer generation, MCP,
+  or agent loop exists yet.

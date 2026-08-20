@@ -21,6 +21,11 @@ class AuthorizedSearchRequest(BaseModel):
         return normalized
 
 
+class EmbeddingReindexData(BaseModel):
+    status: Literal["ready"] = "ready"
+    processed_chunk_count: int = Field(ge=0)
+
+
 class SearchWorkspaceData(BaseModel):
     id: UUID
     slug: str
@@ -38,10 +43,20 @@ class SearchScopeData(BaseModel):
     grants: tuple[SearchScopeGrantData, ...]
 
 
+class SearchEmbeddingData(BaseModel):
+    status: Literal["ready", "indexing", "degraded", "unavailable"]
+    model: str
+    dimensions: int = Field(ge=1)
+    embedded_chunk_count: int = Field(ge=0)
+    pending_chunk_count: int = Field(ge=0)
+    failed_chunk_count: int = Field(ge=0)
+
+
 class SearchIndexingData(BaseModel):
-    status: Literal["ready", "indexing"] = "ready"
+    status: Literal["ready", "indexing", "degraded"] = "ready"
     active_chunk_count: int = Field(ge=0)
     indexed_document_count: int = Field(ge=0)
+    embedding: SearchEmbeddingData
 
 
 class SearchSourceData(BaseModel):
@@ -71,16 +86,54 @@ class AuthorizedSearchResultData(BaseModel):
     document_version_id: UUID
     version_number: int = Field(ge=1)
     excerpt: str
-    score: float = Field(ge=0)
+    scores: "SearchScoresData"
+    citation: "SearchCitationData"
     source: SearchSourceData
     document: SearchDocumentData
 
 
+class SearchScoresData(BaseModel):
+    keyword: float = Field(ge=0, le=1)
+    vector: float = Field(ge=0, le=1)
+    final: float = Field(ge=0, le=1)
+
+
+class SearchCitationData(BaseModel):
+    document_id: UUID
+    document_version_id: UUID
+    chunk_id: UUID
+    document_title: str
+    version_number: int = Field(ge=1)
+    excerpt: str
+    page_number: int | None
+    sheet_name: str | None
+    row_start: int | None
+    row_end: int | None
+    cell_start: str | None
+    cell_end: str | None
+
+
+class RetrievalEvaluationNotRun(BaseModel):
+    status: Literal["not_run"] = "not_run"
+
+
+class RetrievalEvaluationComplete(BaseModel):
+    status: Literal["complete"] = "complete"
+    dataset_name: str
+    curated_query_count: int = Field(ge=0)
+    recall_at_5: float = Field(ge=0, le=1)
+    expected_top_5_hits: int = Field(ge=0)
+    authorization_leak_count: int = Field(ge=0)
+
+
 class AuthorizedSearchData(BaseModel):
-    status: Literal["ready", "indexing"] = "ready"
+    status: Literal["ready", "indexing", "degraded"] = "ready"
     query: str
     top_k: int
     result_count: int = Field(ge=0)
     authorized_scope: SearchScopeData
     indexing: SearchIndexingData
+    evaluation_summary: RetrievalEvaluationNotRun | RetrievalEvaluationComplete = (
+        RetrievalEvaluationNotRun()
+    )
     results: tuple[AuthorizedSearchResultData, ...]
