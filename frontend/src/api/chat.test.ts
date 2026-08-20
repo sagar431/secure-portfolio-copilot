@@ -3,10 +3,12 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   createConversation,
   listConversations,
+  runConversationAgent,
   sendConversationMessage,
 } from './chat'
 import { ApiError } from './client'
 import {
+  agentRunData,
   conversationData,
   groundedAnswerData,
   insufficientAnswerData,
@@ -108,6 +110,185 @@ describe('conversation API', () => {
         'Unsupported question',
       ),
     ).resolves.toMatchObject({ data: { status: 'insufficient_evidence' } })
+  })
+
+  it('posts only normalized content and accepts a strict sanitized agent run', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: agentRunData,
+        request_id: 'agent-run-request',
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      runConversationAgent(
+        'signed-token',
+        conversationData.id,
+        '  Use the bounded workflow.  ',
+      ),
+    ).resolves.toEqual({
+      data: agentRunData,
+      request_id: 'agent-run-request',
+    })
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toContain(
+      `/api/conversations/${conversationData.id}/agent-runs`,
+    )
+    expect(options.method).toBe('POST')
+    if (typeof options.body !== 'string') {
+      throw new Error('Agent run body was not serialized')
+    }
+    expect(JSON.parse(options.body)).toEqual({
+      content: 'Use the bounded workflow.',
+    })
+  })
+
+  it.each([
+    [
+      'raw prompt data',
+      {
+        ...agentRunData,
+        trace: [
+          {
+            ...agentRunData.trace[0],
+            raw_prompt: 'private prompt',
+          },
+          ...agentRunData.trace.slice(1),
+        ],
+      },
+    ],
+    [
+      'tool arguments',
+      {
+        ...agentRunData,
+        trace: [
+          {
+            ...agentRunData.trace[0],
+            tool_arguments: { tenant_id: 'forged-tenant' },
+          },
+          ...agentRunData.trace.slice(1),
+        ],
+      },
+    ],
+    [
+      'authorization scope',
+      {
+        ...agentRunData,
+        authorization_scope: { tenant_id: 'restricted-tenant' },
+      },
+    ],
+    [
+      'raw reasoning',
+      {
+        ...agentRunData,
+        trace: agentRunData.trace.map((event, index) =>
+          index === 1
+            ? { ...event, reasoning: 'hidden chain of thought' }
+            : event,
+        ),
+      },
+    ],
+    [
+      'a model-encoded unapproved action name',
+      {
+        ...agentRunData,
+        trace: agentRunData.trace.map((event, index) =>
+          index === 1
+            ? { ...event, action_name: 'portfolio.private_query_fragment' }
+            : event,
+        ),
+      },
+    ],
+    [
+      'a model-encoded trace reason code',
+      {
+        ...agentRunData,
+        trace: agentRunData.trace.map((event, index) =>
+          index === 1
+            ? { ...event, reason_code: 'PRIVATE_QUERY_FRAGMENT' }
+            : event,
+        ),
+      },
+    ],
+    [
+      'a non-host trace event ID',
+      {
+        ...agentRunData,
+        trace: agentRunData.trace.map((event, index) =>
+          index === 0 ? { ...event, event_id: 'model-controlled-id' } : event,
+        ),
+      },
+    ],
+    [
+      'a non-host evidence reference',
+      {
+        ...agentRunData,
+        trace: agentRunData.trace.map((event, index) =>
+          index === 1
+            ? { ...event, evidence_reference_ids: ['private-fragment'] }
+            : event,
+        ),
+      },
+    ],
+    [
+      'a non-host stopping reason',
+      {
+        ...agentRunData,
+        stopping_reason: 'private_query_fragment',
+      },
+    ],
+    [
+      'a trace without an explicit terminal event',
+      { ...agentRunData, trace: agentRunData.trace.slice(0, -1) },
+    ],
+    [
+      'partial evidence on a non-completed run',
+      {
+        ...agentRunData,
+        terminal_status: 'limit_reached',
+        trace: agentRunData.trace.map((event, index) =>
+          index === agentRunData.trace.length - 1
+            ? { ...event, status: 'terminated' }
+            : event,
+        ),
+      },
+    ],
+    [
+      'a mismatched completed terminal event',
+      {
+        ...agentRunData,
+        trace: agentRunData.trace.map((event, index) =>
+          index === agentRunData.trace.length - 1
+            ? { ...event, status: 'terminated' }
+            : event,
+        ),
+      },
+    ],
+  ])('rejects agent output containing %s', async (_case, data) => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ data, request_id: 'invalid-agent-request' }),
+        ),
+    )
+
+    await expect(
+      runConversationAgent(
+        'signed-token',
+        conversationData.id,
+        'Use the bounded workflow.',
+      ),
+    ).rejects.toEqual(
+      new ApiError(
+        'Backend returned an invalid response.',
+        200,
+        'invalid_response',
+        'invalid-agent-request',
+      ),
+    )
   })
 
   it.each([

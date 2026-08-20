@@ -1,5 +1,7 @@
 import type { ApiSuccessEnvelope } from '../types/api'
 import type {
+  AgentRunData,
+  AgentTraceEventData,
   ConversationCreateData,
   ConversationData,
   ConversationListData,
@@ -24,6 +26,92 @@ const ISO_TIMESTAMP =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const AGENT_EVIDENCE_REFERENCE = /^ev_[1-9][0-9]{0,2}$/
+const APPROVED_STOPPING_REASONS = new Set([
+  'citation_validation_failed',
+  'clarification_required',
+  'completed',
+  'duration',
+  'insufficient_authorized_evidence',
+  'malformed_action',
+  'max_replans',
+  'max_retrieval_rewrites',
+  'max_steps',
+  'model_error',
+  'plan_exhausted',
+  'request_refused',
+  'scope_denied',
+  'tool_error',
+  'tool_timeout',
+])
+const APPROVED_AGENT_ACTION_NAMES = new Set([
+  'portfolio.search_authorized_documents',
+  'portfolio.get_document_excerpt',
+])
+const APPROVED_TRACE_REASON_CODES = new Set([
+  'ACTION_VALIDATED',
+  'AGENT_FAILED_SAFE',
+  'AUTHORIZATION_DENIED',
+  'AUTHORIZATION_IDENTITY_MISMATCH',
+  'CAPABILITY_SHORTLIST_BOUND',
+  'CITATION_VALIDATION_FAILED',
+  'CITATIONS_VALIDATED',
+  'CLARIFICATION_REQUIRED',
+  'COMPLETED',
+  'DECISION_PRODUCED',
+  'DURATION',
+  'FINALIZATION_STARTED',
+  'INPUT_SCHEMA_REJECTED',
+  'INSUFFICIENT_AUTHORIZED_EVIDENCE',
+  'MALFORMED_ACTION',
+  'MAX_REPLANS',
+  'MAX_RETRIEVAL_REWRITES',
+  'MAX_STEPS',
+  'MODEL_ERROR',
+  'OBSERVATION_VALIDATED',
+  'OUTPUT_SCHEMA_REJECTED',
+  'PERCEPTION_COMPLETED',
+  'PLAN_EXHAUSTED',
+  'REQUEST_REFUSED',
+  'REQUEST_SCOPE_NOT_AUTHORIZED',
+  'SCOPE_DENIED',
+  'STEP_RESULT_PERCEIVED',
+  'TOOL_COMPLETED',
+  'TOOL_ERROR',
+  'TOOL_FAILED_SAFE',
+  'TOOL_NOT_PERMITTED',
+  'TOOL_NOT_SHORTLISTED',
+  'TOOL_TIMEOUT',
+  'TOOL_TRANSIENT_FAILURE',
+  'TRUSTED_SCOPE_BOUND',
+  'UNKNOWN_TOOL',
+])
+const AGENT_TERMINAL_STATUSES = new Set([
+  'completed',
+  'refused',
+  'needs_clarification',
+  'insufficient_evidence',
+  'limit_reached',
+  'failed',
+])
+const AGENT_TRACE_EVENT_TYPES = new Set([
+  'perception',
+  'policy',
+  'decision',
+  'gateway',
+  'tool',
+  'observation',
+  'finalization',
+  'terminal',
+])
+const AGENT_TRACE_EVENT_STATUSES = new Set([
+  'started',
+  'completed',
+  'denied',
+  'timeout',
+  'failed',
+  'terminated',
+])
 
 function hasOnlyKeys(value: Record<string, unknown>, keys: string[]) {
   const actualKeys = Object.keys(value)
@@ -157,6 +245,28 @@ function isClaim(value: unknown): value is GroundedClaimData {
   )
 }
 
+function hasValidCitationGraph(
+  claims: GroundedClaimData[],
+  citations: GroundedCitationData[],
+) {
+  const citationIds = new Set(citations.map((citation) => citation.citation_id))
+  if (citationIds.size !== citations.length) {
+    return false
+  }
+  if (claims.length === 0 || citations.length === 0) {
+    return claims.length === 0 && citations.length === 0
+  }
+  const referencedCitationIds = new Set(
+    claims.flatMap((claim) => claim.citation_ids),
+  )
+  return (
+    referencedCitationIds.size === citationIds.size &&
+    [...referencedCitationIds].every((citationId) =>
+      citationIds.has(citationId),
+    )
+  )
+}
+
 function isExactEnvelope<T>(
   response: ApiSuccessEnvelope<unknown>,
   validateData: (value: unknown) => value is T,
@@ -222,28 +332,131 @@ function isGroundedAnswerData(value: unknown): value is GroundedAnswerData {
     return false
   }
 
-  const citationIds = new Set(
-    value.citations.map((citation) => citation.citation_id),
-  )
-  if (citationIds.size !== value.citations.length) {
-    return false
-  }
-
   if (value.status === 'insufficient_evidence') {
     return value.claims.length === 0 && value.citations.length === 0
   }
-  if (value.claims.length === 0 || value.citations.length === 0) {
+  return (
+    value.claims.length > 0 &&
+    value.citations.length > 0 &&
+    hasValidCitationGraph(value.claims, value.citations)
+  )
+}
+
+function isSafeCounter(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 0 &&
+    value <= 1_000
+  )
+}
+
+function isAgentTraceEvent(value: unknown): value is AgentTraceEventData {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, [
+      'event_id',
+      'event_type',
+      'action_name',
+      'status',
+      'duration_ms',
+      'evidence_reference_ids',
+      'reason_code',
+    ]) &&
+    isUuid(value.event_id) &&
+    typeof value.event_type === 'string' &&
+    AGENT_TRACE_EVENT_TYPES.has(value.event_type) &&
+    (value.action_name === null ||
+      (typeof value.action_name === 'string' &&
+        APPROVED_AGENT_ACTION_NAMES.has(value.action_name))) &&
+    typeof value.status === 'string' &&
+    AGENT_TRACE_EVENT_STATUSES.has(value.status) &&
+    typeof value.duration_ms === 'number' &&
+    Number.isInteger(value.duration_ms) &&
+    value.duration_ms >= 0 &&
+    value.duration_ms <= 3_600_000 &&
+    Array.isArray(value.evidence_reference_ids) &&
+    value.evidence_reference_ids.length <= 100 &&
+    value.evidence_reference_ids.every(
+      (reference) =>
+        typeof reference === 'string' &&
+        AGENT_EVIDENCE_REFERENCE.test(reference),
+    ) &&
+    new Set(value.evidence_reference_ids).size ===
+      value.evidence_reference_ids.length &&
+    (value.reason_code === null ||
+      (typeof value.reason_code === 'string' &&
+        APPROVED_TRACE_REASON_CODES.has(value.reason_code)))
+  )
+}
+
+function isAgentRunData(value: unknown): value is AgentRunData {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      'conversation_id',
+      'user_message_id',
+      'assistant_message_id',
+      'agent_session_id',
+      'terminal_status',
+      'stopping_reason',
+      'answer',
+      'claims',
+      'citations',
+      'limitations',
+      'step_count',
+      'replan_count',
+      'retry_count',
+      'trace',
+    ]) ||
+    !isUuid(value.conversation_id) ||
+    !isUuid(value.user_message_id) ||
+    !isUuid(value.assistant_message_id) ||
+    !isUuid(value.agent_session_id) ||
+    typeof value.terminal_status !== 'string' ||
+    !AGENT_TERMINAL_STATUSES.has(value.terminal_status) ||
+    typeof value.stopping_reason !== 'string' ||
+    !APPROVED_STOPPING_REASONS.has(value.stopping_reason) ||
+    !isBoundedString(value.answer, CHAT_ANSWER_MAX_LENGTH) ||
+    !Array.isArray(value.claims) ||
+    !value.claims.every(isClaim) ||
+    !Array.isArray(value.citations) ||
+    !value.citations.every(isCitation) ||
+    !Array.isArray(value.limitations) ||
+    !value.limitations.every((limitation) =>
+      isBoundedString(limitation, CHAT_LIMITATION_MAX_LENGTH),
+    ) ||
+    !isSafeCounter(value.step_count) ||
+    !isSafeCounter(value.replan_count) ||
+    !isSafeCounter(value.retry_count) ||
+    !Array.isArray(value.trace) ||
+    value.trace.length === 0 ||
+    value.trace.length > 256 ||
+    !value.trace.every(isAgentTraceEvent)
+  ) {
     return false
   }
-  const referencedCitationIds = new Set(
-    value.claims.flatMap((claim) => claim.citation_ids),
-  )
-  return (
-    referencedCitationIds.size === citationIds.size &&
-    [...referencedCitationIds].every((citationId) =>
-      citationIds.has(citationId),
+
+  const finalTraceEvent = value.trace.at(-1)
+  if (
+    new Set(value.trace.map((event) => event.event_id)).size !==
+      value.trace.length ||
+    finalTraceEvent?.event_type !== 'terminal' ||
+    (value.terminal_status === 'completed'
+      ? finalTraceEvent.status !== 'completed'
+      : finalTraceEvent.status !== 'terminated')
+  ) {
+    return false
+  }
+
+  if (value.terminal_status === 'completed') {
+    return (
+      value.claims.length > 0 &&
+      value.citations.length > 0 &&
+      hasValidCitationGraph(value.claims, value.citations)
     )
-  )
+  }
+  return value.claims.length === 0 && value.citations.length === 0
 }
 
 function invalidResponse(requestId: string | null) {
@@ -339,6 +552,38 @@ export async function sendConversationMessage(
     },
   )
   if (!isExactEnvelope(response, isGroundedAnswerData)) {
+    throw invalidResponse(response.request_id ?? null)
+  }
+  if (response.data.conversation_id !== conversationId) {
+    throw invalidResponse(response.request_id)
+  }
+  return response
+}
+
+export async function runConversationAgent(
+  token: string,
+  conversationId: string,
+  content: string,
+  signal?: AbortSignal,
+): Promise<ApiSuccessEnvelope<AgentRunData>> {
+  if (!isUuid(conversationId)) {
+    throw new ApiError(
+      'Select a valid conversation.',
+      0,
+      'invalid_conversation_id',
+      null,
+    )
+  }
+  const response = await requestJson<unknown>(
+    `${CONVERSATIONS_PATH}/${encodeURIComponent(conversationId)}/agent-runs`,
+    {
+      method: 'POST',
+      token,
+      body: validateMessage(content),
+      signal,
+    },
+  )
+  if (!isExactEnvelope(response, isAgentRunData)) {
     throw invalidResponse(response.request_id ?? null)
   }
   if (response.data.conversation_id !== conversationId) {

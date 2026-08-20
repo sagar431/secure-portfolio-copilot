@@ -12,6 +12,7 @@ import * as chatApi from '../api/chat'
 import { ApiError } from '../api/client'
 import { AuthContext, type AuthContextValue } from '../auth/context'
 import {
+  agentRunData,
   conversationData,
   groundedAnswerData,
   insufficientAnswerData,
@@ -22,6 +23,7 @@ import { ChatPage } from './ChatPage'
 vi.mock('../api/chat', () => ({
   listConversations: vi.fn(),
   createConversation: vi.fn(),
+  runConversationAgent: vi.fn(),
   sendConversationMessage: vi.fn(),
 }))
 
@@ -91,6 +93,10 @@ describe('ChatPage', () => {
       data: groundedAnswerData,
       request_id: 'grounded-answer-request',
     })
+    vi.mocked(chatApi.runConversationAgent).mockResolvedValue({
+      data: agentRunData,
+      request_id: 'agent-run-request',
+    })
   })
 
   it('loads the owned conversation list and offers bounded suggestions', async () => {
@@ -145,6 +151,54 @@ describe('ChatPage', () => {
       within(drawer).getByRole('button', { name: 'Close evidence' }),
     )
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('runs the explicit bounded-agent path and renders only sanitized timeline fields', async () => {
+    renderPage()
+    await screen.findByRole('heading', { name: 'Orion finance review' })
+    fireEvent.change(screen.getByLabelText('Ask about approved documents'), {
+      target: { value: '  Use the approved document tools.  ' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run bounded agent' }))
+
+    await waitFor(() =>
+      expect(chatApi.runConversationAgent).toHaveBeenCalledWith(
+        'signed-alice-token',
+        conversationData.id,
+        'Use the approved document tools.',
+        expect.any(AbortSignal),
+      ),
+    )
+    expect(chatApi.sendConversationMessage).not.toHaveBeenCalled()
+    const timeline = screen.getByRole('region', {
+      name: 'Bounded orchestration timeline',
+    })
+    expect(within(timeline).getByText('Session ID')).toBeInTheDocument()
+    expect(
+      within(timeline).getByText(agentRunData.agent_session_id),
+    ).toBeInTheDocument()
+    expect(
+      within(timeline).getByText('portfolio.search_authorized_documents'),
+    ).toBeInTheDocument()
+    expect(within(timeline).getByText('23 ms')).toBeInTheDocument()
+    expect(within(timeline).getByText('COMPLETED')).toBeInTheDocument()
+    expect(
+      within(timeline).queryByText('private prompt'),
+    ).not.toBeInTheDocument()
+    expect(
+      within(timeline).queryByText('hidden chain of thought'),
+    ).not.toBeInTheDocument()
+    expect(
+      within(timeline).queryByText('restricted-tenant'),
+    ).not.toBeInTheDocument()
+
+    fireEvent.click(
+      within(timeline).getAllByRole('button', { name: 'ev_1' })[0],
+    )
+    expect(
+      screen.getByRole('dialog', { name: 'orion-finance.xlsx' }),
+    ).toBeInTheDocument()
+    expect(document.querySelector('script')).toBeNull()
   })
 
   it('creates a private conversation automatically before the first question', async () => {

@@ -2,9 +2,10 @@
 
 ## Current step
 
-Playbook Step 6 complete — a non-agentic grounded RAG chat now uses Step 5 authorized retrieval,
-Gemini structured output, host-side citation validation, controlled abstention, sanitized traces, and
-a secured React conversation workspace. Step 7 is next.
+Playbook Step 7 complete — the Step 6 grounded path remains intact and a production-safe bounded
+single-agent path now adds separate typed Perception and Decision calls, an approved MCP gateway,
+two authorization-revalidating document tools, explicit terminal states, and a sanitized React
+timeline. Step 8 was not started.
 
 ## Implemented
 
@@ -54,12 +55,38 @@ a secured React conversation workspace. Step 7 is next.
   conversation IDs before rendering content as inert React text.
 - Automated model tests use deterministic fakes. They do not call Gemini, require a key, or depend on
   network availability.
+- `POST /api/conversations/{conversation_id}/agent-runs` reloads conversation ownership and current
+  database grants before any model or tool work. Recognizable cross-scope requests terminate as a
+  controlled refusal before Perception, MCP, retrieval, or Gemini.
+- One typed `AgentSession` owns separate `user_query`/`step_result` Perception snapshots, Decision
+  plan versions, exactly one next `TOOL_CALL|FINALIZE|CLARIFY|REFUSE` action, structured
+  observations, completed steps, counters, evidence, and one explicit terminal status. Defaults
+  enforce four tool steps, one semantic retrieval rewrite, one replan, a 90-second total duration,
+  a per-tool timeout, and at most one transient retry.
+- The official pinned `mcp==2.0.0` SDK runs an in-process request-scoped server/client. Its catalog is
+  statically limited to `portfolio.search_authorized_documents` and
+  `portfolio.get_document_excerpt`, filtered by the host shortlist and current capability, and
+  rechecked at execution. Raw model arguments are strictly validated before MCP conversion; trusted
+  `AuthorizationScope` is injected through host closures and both adapters reauthorize through the
+  Step 5 database predicates.
+- Startup validates unique namespaced ownership plus exact input/output schema and capability
+  mappings. Unknown/unshortlisted tools, forged scope fields, malformed input/output, missing or
+  unauthorized IDs, provider failures, and bounds terminate with safe typed observations.
+- Separate Gemini Perception and Decision calls use structured JSON, medium thinking with thoughts
+  excluded, bounded timeout/output, one transient retry, no tools, and strict local validation.
+  Decision cannot execute tools, emit source code, or create/change scope; only the host loop calls
+  the MCP gateway. Final answers reuse Step 6 host citation reconstruction and validation.
+- The public trace contains only host UUID event IDs, eight stage/status types, the two approved
+  action names, host-issued `ev_N` references, bounded durations, counters, and explicit allow-listed
+  reason/stopping codes. It excludes queries, prompts, plans, observations, excerpts, answers,
+  authorization fields, paths, exceptions, secrets, and model rationale/reasoning. The frontend
+  recursively rejects any extra or non-host trace value before rendering inert text.
 
 ## Pending acceptance criteria
 
-None within Step 6. The supported, unsupported, cross-tenant, and cross-department paths; citation
-and prompt boundaries; fake-provider integration; live-provider smoke; UI states; and persistence
-migration gates passed.
+None within Step 7. Bounded success and all terminal paths, gateway/MCP contracts, authorization,
+schema/startup, retry/timeout, trace-redaction, citation preservation, fake-provider, local MCP,
+live-model, frontend, regression, migration, and repository-integrity gates passed.
 
 ## Verification result
 
@@ -85,10 +112,17 @@ evidence, answer, or reasoning. Focused security tests also pass for prompt inje
 scope denial, authorization-before-generation, citation reconstruction/validation, safe provider
 failure, retry bounds, and content-free logs. Repository integrity and `git diff --check` pass.
 
+Step 7 was independently verified on 2026-08-21. Backend Ruff format/lint and strict mypy pass; all
+236 backend tests pass against isolated PostgreSQL. Frontend Prettier, ESLint, strict
+TypeScript, all 88 Vitest tests, the zero-vulnerability npm audit, and the production build pass.
+The official MCP in-process smoke, real authorized search/excerpt integration, adversarial gateway
+and agent state-machine tests, unrestricted-execution scan, and trace-redaction gates pass. Step 7
+adds no migration; the existing `0006 -> 0005 -> 0006` reversibility and drift cycle remains green.
+
 ## Known limitations
 
-- Step 6 is deliberately non-agentic. There is no MCP, Perception/Decision split, plan, tool call,
-  memory, financial calculation, arbitrary execution, cloud deployment, or Step 7 behavior.
+- The agent trace is response-only; Step 7 does not add AgentRun/Plan/Step/Observation persistence or
+  a trace-history endpoint. Existing message content and metadata-only request traces still persist.
 - The conversation list is persisted, and message rows are stored, but Step 6 has no message-history
   read endpoint and sends no prior turns to Gemini. After a reload the UI lists the conversation but
   cannot reload its earlier transcript; there is no working or long-term memory.
@@ -108,6 +142,10 @@ failure, retry bounds, and content-free logs. Repository integrity and `git diff
 - The Gemini API key is local environment configuration and the live smoke is a one-case
   connectivity/contract check, not a broad faithfulness, latency, availability, or cost benchmark.
   The fake provider is deterministic test infrastructure, not evidence of live-model quality.
+- Perception and Decision quality remains model-dependent. Deterministic host validation constrains
+  actions, authority, bounds, and trace/output shape, but it does not prove that a plan is optimal.
+- The MCP gateway is embedded in-process. There is no remote MCP transport, dynamic discovery,
+  multi-agent coordination, memory, deterministic financial calculation, or general sandbox.
 - Production still requires `EMBEDDING_PROVIDER=disabled`; therefore the current synchronous Step 5
   retrieval dependency makes grounded chat a local demonstration rather than a production-ready
   deployment. A production embedding/indexing design remains necessary.
@@ -119,4 +157,4 @@ fake-provider, live Gemini, chat/API/UI, authorization, redaction, and failure c
 
 ## Next approved step
 
-Step 7 — safe AgentLoop and MCP gateway. Do not start Step 8.
+None in this goal. Step 8 was explicitly not started.

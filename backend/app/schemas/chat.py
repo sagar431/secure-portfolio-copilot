@@ -84,3 +84,46 @@ class GroundedMessageData(BaseModel):
     claims: tuple[GroundedClaimData, ...]
     citations: tuple[GroundedCitationData, ...]
     limitations: tuple[str, ...]
+
+
+class AgentTraceEventData(BaseModel):
+    event_id: UUID
+    event_type: Literal[
+        "perception",
+        "policy",
+        "decision",
+        "gateway",
+        "tool",
+        "observation",
+        "finalization",
+        "terminal",
+    ]
+    action_name: str | None
+    status: Literal["started", "completed", "denied", "timeout", "failed", "terminated"]
+    duration_ms: int = Field(ge=0)
+    evidence_reference_ids: tuple[str, ...]
+    reason_code: str
+
+
+class AgentRunMessageData(BaseModel):
+    conversation_id: UUID
+    user_message_id: UUID
+    assistant_message_id: UUID
+    agent_session_id: UUID
+    terminal_status: Literal[
+        "completed",
+        "refused",
+        "needs_clarification",
+        "insufficient_evidence",
+        "limit_reached",
+        "failed",
+    ]
+    stopping_reason: str
+    answer: str
+    claims: tuple[GroundedClaimData, ...]
+    citations: tuple[GroundedCitationData, ...]
+    limitations: tuple[str, ...]
+    step_count: int = Field(ge=0)
+    replan_count: int = Field(ge=0)
+    retry_count: int = Field(ge=0)
+    trace: tuple[AgentTraceEventData, ...]

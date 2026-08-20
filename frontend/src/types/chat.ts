@@ -62,8 +62,66 @@ export interface GroundedAnswerData {
   limitations: string[]
 }
 
-export interface ChatTurn {
+export type AgentTerminalStatus =
+  | 'completed'
+  | 'refused'
+  | 'needs_clarification'
+  | 'insufficient_evidence'
+  | 'limit_reached'
+  | 'failed'
+
+export type AgentTraceEventType =
+  | 'perception'
+  | 'policy'
+  | 'decision'
+  | 'gateway'
+  | 'tool'
+  | 'observation'
+  | 'finalization'
+  | 'terminal'
+
+export type AgentTraceEventStatus =
+  'started' | 'completed' | 'denied' | 'timeout' | 'failed' | 'terminated'
+
+export interface AgentTraceEventData {
+  event_id: string
+  event_type: AgentTraceEventType
+  action_name: string | null
+  status: AgentTraceEventStatus
+  duration_ms: number
+  evidence_reference_ids: string[]
+  reason_code: string | null
+}
+
+export interface AgentRunData {
+  conversation_id: string
+  user_message_id: string
+  assistant_message_id: string
+  agent_session_id: string
+  terminal_status: AgentTerminalStatus
+  stopping_reason: string
+  answer: string
+  claims: GroundedClaimData[]
+  citations: GroundedCitationData[]
+  limitations: string[]
+  step_count: number
+  replan_count: number
+  retry_count: number
+  trace: AgentTraceEventData[]
+}
+
+export interface GroundedChatTurn {
+  kind: 'grounded'
   id: string
   question: string
   response: GroundedAnswerData
 }
+
+export interface AgentChatTurn {
+  kind: 'agent'
+  id: string
+  question: string
+  response: AgentRunData
+}
+
+export type ChatTurn = GroundedChatTurn | AgentChatTurn

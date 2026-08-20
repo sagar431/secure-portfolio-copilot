@@ -1,12 +1,12 @@
 # Secure Portfolio Copilot
 
-A security-first portfolio analysis copilot, complete through Playbook Step 6. In addition to
+A security-first portfolio analysis copilot, complete through Playbook Step 7. In addition to
 database-revalidated identity, governed PDF/XLSX/CSV ingestion, and authorization-first hybrid
-retrieval, it provides a non-agentic grounded chat over approved evidence. Gemini receives only
-evidence returned by the Step 5 retriever; host code validates every citation and reconstructs its
-document/version/chunk and page or spreadsheet provenance before the browser renders it. The
-project still contains no MCP, memory, calculation, agent loop, arbitrary execution, or cloud
-deployment.
+retrieval, it provides both the Step 6 non-agentic grounded chat and a bounded single-agent path.
+The agent separates Perception and Decision, invokes only two approved document tools through an
+embedded MCP gateway with host-injected authorization, and preserves Step 6 citation validation.
+The project contains no memory, calculation engine, arbitrary execution, multi-agent system, or
+cloud deployment.
 
 ## Prerequisites
 
@@ -17,7 +17,7 @@ deployment.
 - [Ollama](https://ollama.com/) for the live development embedding smoke test. Automated tests use a
   deterministic fake provider and do not require Ollama.
 - A Gemini API key in the ignored local `.env` for the separate minimal live Step 6 smoke. Automated
-  tests use a deterministic fake LLM and do not require Gemini or a key.
+  tests use deterministic fake LLM/agent providers and do not require Gemini or a key.
 
 ## One-time setup
 
@@ -69,6 +69,12 @@ LLM_THINKING_LEVEL=medium
 LLM_TIMEOUT_SECONDS=30
 LLM_MAX_OUTPUT_TOKENS=1024
 LLM_MAX_EVIDENCE_CHUNKS=5
+AGENT_MAX_STEPS=4
+AGENT_MAX_REPLANS=1
+AGENT_MAX_RETRIEVAL_REWRITES=1
+AGENT_MAX_DURATION_SECONDS=90
+AGENT_TOOL_TIMEOUT_SECONDS=10
+AGENT_TOOL_MAX_TRANSIENT_RETRIES=1
 ```
 
 The model and thinking level are fixed by settings validation. `fake` exists for deterministic
@@ -171,9 +177,9 @@ npm audit --audit-level=high
 npm run build
 ```
 
-The verified Step 6 checkpoint passes 191 backend pytest tests and 74 frontend Vitest tests, plus
+The verified Step 7 checkpoint passes 236 backend tests and 88 frontend Vitest tests, plus
 all format, lint, strict type, audit, build, migration, and integrity gates. See the testing guide
-for the focused fake-provider, redaction, migration-cycle, and live Gemini checks.
+for the focused fake-provider, MCP/agent, redaction, migration-cycle, and live Gemini checks.
 
 Database and migrations:
 
@@ -332,6 +338,32 @@ unknown, duplicate, or unreferenced citations.
 Step 6 does not provide a message-history read endpoint. Reloaded conversations are listed, but
 earlier turns are not loaded or sent back to Gemini; there is no conversation memory yet.
 
+## Step 7 bounded agent and MCP workflow
+
+`POST /api/conversations/{conversation_id}/agent-runs` preserves the same owner and capability
+checks, recognizable scope preflight, authorized evidence, persistence, and final citation rules.
+One request owns one typed `AgentSession`. Separate Gemini structured calls perform initial and
+step-result Perception and initial/mid-session Decision. Decision returns one short plan and exactly
+one typed action; host code—not Gemini—executes it.
+
+The embedded official MCP client/server advertises only the request's capability-filtered subset of
+`portfolio.search_authorized_documents` and `portfolio.get_document_excerpt`. The host validates
+raw action JSON before MCP conversion, injects the immutable database-backed scope outside model
+arguments, and revalidates it inside each adapter. Startup fails on duplicate names or schema/
+capability drift. Unknown tools, forged authorization fields, malformed data, unauthorized IDs,
+timeouts, and permanent failures return content-free observations.
+
+The loop allows at most four tool steps, one semantic search rewrite, one replan, one transient tool
+retry, a per-tool timeout, and 90 seconds total by default. Every path ends as `completed`,
+`refused`, `needs_clarification`, `insufficient_evidence`, `limit_reached`, or `failed`. A completed
+answer is accepted only after the Step 6 host citation validator reconstructs all cited provenance.
+
+The `/chat` page keeps **Ask copilot** as the Step 6 default and adds **Run bounded agent**. Agent
+turns show a sanitized responsive timeline. Only host UUID event IDs, stage/status, the two approved
+tool names, `ev_N` evidence references, durations, counters, and allow-listed reason/stopping codes
+are accepted. Prompts, queries, plan text, raw observations, evidence content, scope, paths,
+exceptions, secrets, and model reasoning are neither stored nor rendered in that trace.
+
 ## Security boundary for this milestone
 
 Only synthetic data belongs in this repository. The API does not log request bodies. Unexpected
@@ -341,13 +373,15 @@ grants. The browser cannot supply effective identity or scope. Passwords use Arg
 errors are generic, and request/audit logs exclude passwords, tokens, request bodies, and query
 strings.
 
-Upload, parsing, chunking, embedding, hybrid retrieval, and grounded chat are bounded Step 6
-capabilities. The embedding model contributes similarity only. Gemini may draft claims from supplied
-evidence, but deterministic code owns authorization, lifecycle, evidence selection, limits,
-citation membership/provenance, abstention, persistence, and audit metadata. Documents are treated
-as untrusted prompt data and no Gemini tools are configured. Chat logs/traces exclude questions,
-prompts, excerpts, answers, provider bodies, keys, and hidden reasoning; conversation `messages`
-intentionally persist the user's question and the controlled assistant answer.
+Upload, parsing, chunking, embedding, hybrid retrieval, grounded chat, and bounded orchestration are
+controlled capabilities. The embedding model contributes similarity only. Gemini may classify,
+plan one typed next action, and draft claims from authorized evidence, but deterministic code owns
+authorization, catalogs, execution, lifecycle, evidence, limits, terminal states, citations,
+persistence, and audit metadata. No Gemini tools are configured; tool execution occurs only through
+the host MCP gateway. Logs/traces exclude questions, prompts, excerpts, answers, provider bodies,
+keys, and hidden reasoning; conversation `messages` intentionally persist the user's question and
+the controlled assistant answer.
 
-Broad semantic entailment/numeric validation, reranking, message-history loading, retention jobs,
-MCP, memory, calculations, agent code, production embedding infrastructure, and AWS remain absent.
+Broad semantic entailment/numeric validation, reranking, message-history loading, trace persistence,
+retention jobs, memory, calculations, arbitrary code, remote/dynamic MCP, production embedding
+infrastructure, and AWS remain absent.

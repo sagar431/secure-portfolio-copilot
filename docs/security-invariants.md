@@ -1,4 +1,4 @@
-# Step 6 Security Invariants
+# Step 7 Security Invariants
 
 These rules apply now and must remain true as later milestones are approved.
 
@@ -181,8 +181,51 @@ These rules apply now and must remain true as later milestones are approved.
 67. **No partial UI answer.** Loading, cancellation, timeout, denial, and error paths do not render a
     partial provider response or unvalidated citation. Browser cancellation is a UI guarantee, not a
     claim that already-started upstream work was canceled.
-68. **No later capabilities.** Step 6 has no MCP, Perception, Decision, plan, tool calling, memory,
-    deterministic financial calculation, arbitrary execution, cloud deployment, or agent loop.
+68. **Non-agentic regression preserved.** The direct Step 6 message route remains available and
+    continues to retrieve, generate, validate, persist, and fail independently of MCP/AgentLoop.
+69. **One bounded agent owner.** One typed `AgentSession` owns the request goal, immutable trusted
+    context, snapshots, plans, completed steps, observations, counters, status, and final answer.
+    Perception, Decision, retrieval, and MCP are stages/services, not separate agents.
+70. **Exactly one typed action.** Decision returns one `TOOL_CALL`, `FINALIZE`, `CLARIFY`, or
+    `REFUSE` matching a pending plan step. Source code, Python, SQL, shell, URL, path, browser,
+    computer, dynamic discovery, and positional-string reconstruction are rejected.
+71. **Host-only authority and catalog.** Scope never appears in model arguments. The host injects
+    the immutable database-derived `AuthorizationScope`, derives a request/capability-filtered
+    shortlist, and the model sees only approved names.
+72. **MCP reauthorization.** Tool hiding is defense in depth. Every call rechecks the exact static
+    name, shortlist, capability, strict input schema, and adapter database authorization before
+    content is returned. Missing and unauthorized excerpt IDs are indistinguishable.
+73. **Static owned tools.** Only `portfolio.search_authorized_documents` and
+    `portfolio.get_document_excerpt` exist. Application startup fails on duplicate/missing names,
+    namespace, schema, or capability drift. No unrestricted runtime tool installation/discovery is
+    present.
+74. **Strict protocol boundaries.** Raw action JSON is validated before MCP SDK conversion, and MCP
+    structured output is validated again locally. Coercible strings, forged scope keys, malformed
+    input/output, corrupt provenance, oversized excerpts/results, and unknown fields fail closed.
+75. **Bounded execution.** Defaults cap four tool steps, one semantic retrieval rewrite, one replan,
+    one transient retry, per-tool time, and total duration. Host code counts changed plans even when
+    the model does not. Plan exhaustion never fabricates completion.
+76. **Authorization denial never retries.** A denial stops immediately. If a prior transient attempt
+    occurred, its historical retry count may remain, but the denied attempt itself is not retried.
+77. **Structured safe observations.** Successful observations carry only schema-valid authorized
+    evidence. Denied/failed observations carry no evidence or raw error. Host IDs replace
+    model-controlled evidence identity before finalization.
+78. **Separate constrained model stages.** Perception and Decision are separate structured Gemini
+    calls with medium thinking, thoughts excluded, timeout/output bounds, at most one transient
+    provider retry, and no tools/search/code/files/URLs. Strict local models reject coercion and
+    extra fields.
+79. **Citation finalization preserved.** Only `completed` can contain claims/citations. The Step 6
+    host validator requires every claim ID to exist in authorized observation evidence and rebuilds
+    exact document/version/chunk and source provenance.
+80. **Host-issued trace projection.** Public trace values are limited to UUID event IDs, fixed
+    stages/statuses, two approved tool names, `ev_N` evidence IDs, bounded durations/counters, and
+    explicit reason/stopping allowlists. Model reason codes, query, prompts, plan, arguments, scope,
+    evidence text, answers, paths, errors, secrets, and reasoning are excluded.
+81. **No new persistence surface.** The detailed Step 7 timeline is response-only. Existing messages
+    intentionally store conversation text; metadata traces store only safe IDs/status/counts. There
+    is no global/unscoped memory.
+82. **No later capabilities.** Step 7 has no financial calculation tool, memory, sandbox, arbitrary
+    execution, remote/dynamic MCP, multi-agent design, cloud deployment, or Step 8 behavior.
 
 Automated tests cover password/token primitives, exact seeded scopes, policy reason codes, generic
 login errors, forged fields, malformed/expired/wrong-issuer/wrong-audience/wrong-signature tokens,
@@ -196,6 +239,9 @@ provider/model validation, bounded batching, production/provider isolation, auth
 vector SQL construction, embedding invalidation/backfill, citation response validation,
 conversation ownership, authorization-before-prompting, scope preflight, prompt injection, Gemini
 no-tool/bound/retry behavior, fake-provider grounded answers, citation reconstruction and failure,
-sanitized trace/log behavior, and all chat UI states. Final Step 6 verification passes 191 backend
-and 74 frontend tests, migration `0006` downgrade/re-upgrade/drift checks, live Ollama and minimal
-synthetic Gemini smokes, production/integrity gates, and zero-vulnerability frontend audit.
+sanitized trace/log behavior, and all chat UI states. Step 7 adds adversarial action/gateway/MCP,
+strict schema, startup catalog, timeout/retry/denial, loop-limit/replan/rewrite, prompt-injection,
+trace-smuggling, evidence/citation, real excerpt, and agent UI tests. Final verification passes 236
+backend and 88 frontend tests, migration `0006` downgrade/re-upgrade/drift checks, live Ollama and
+minimal synthetic Gemini/MCP smokes, production/integrity gates, and the zero-vulnerability
+frontend audit.

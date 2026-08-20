@@ -11,6 +11,7 @@ import type { Capability } from './types/auth'
 vi.mock('./api/chat', () => ({
   listConversations: vi.fn(),
   createConversation: vi.fn(),
+  runConversationAgent: vi.fn(),
   sendConversationMessage: vi.fn(),
 }))
 

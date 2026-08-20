@@ -4,14 +4,18 @@ import { ApiError } from '../api/client'
 import {
   createConversation,
   listConversations,
+  runConversationAgent,
   sendConversationMessage,
 } from '../api/chat'
 import { useAuth } from '../auth/useAuth'
+import { AgentTraceTimeline } from '../components/AgentTraceTimeline'
 import { EvidenceDrawer } from '../components/EvidenceDrawer'
 import { GroundedAnswer } from '../components/GroundedAnswer'
 import type {
+  AgentRunData,
   ChatTurn,
   ConversationData,
+  GroundedAnswerData,
   GroundedCitationData,
 } from '../types/chat'
 import { CHAT_QUESTION_MAX_LENGTH } from '../types/chat'
@@ -34,12 +38,19 @@ const TIMEOUT_CODES = new Set([
   'llm_timeout',
   'provider_timeout',
   'generation_timeout',
+  'agent_timeout',
+  'tool_timeout',
+  'duration_exceeded',
 ])
 const DENIAL_CODES = new Set([
   'forbidden',
   'authorization_denied',
   'conversation_not_found',
+  'scope_denied',
+  'tool_authorization_denied',
 ])
+
+type SubmissionMode = 'grounded' | 'agent'
 
 function safeError(error: unknown): SafeError {
   if (error instanceof ApiError) {
@@ -98,6 +109,20 @@ function ErrorCard({ error }: { error: SafeError }) {
   )
 }
 
+function agentAnswer(run: AgentRunData): GroundedAnswerData {
+  const hasGroundedClaims = run.claims.length > 0 && run.citations.length > 0
+  return {
+    conversation_id: run.conversation_id,
+    user_message_id: run.user_message_id,
+    assistant_message_id: run.assistant_message_id,
+    status: hasGroundedClaims ? 'grounded' : 'insufficient_evidence',
+    answer: run.answer,
+    claims: run.claims,
+    citations: run.citations,
+    limitations: run.limitations,
+  }
+}
+
 export function ChatPage() {
   const auth = useAuth()
   const [conversations, setConversations] = useState<ConversationData[]>([])
@@ -109,6 +134,7 @@ export function ChatPage() {
   const [loadingList, setLoadingList] = useState(true)
   const [creating, setCreating] = useState(false)
   const [sending, setSending] = useState(false)
+  const [sendingMode, setSendingMode] = useState<SubmissionMode>('grounded')
   const [canceled, setCanceled] = useState(false)
   const [error, setError] = useState<SafeError | null>(null)
   const [openCitation, setOpenCitation] = useState<GroundedCitationData | null>(
@@ -175,6 +201,11 @@ export function ChatPage() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    const submitter = (event.nativeEvent as SubmitEvent).submitter
+    const submissionMode =
+      submitter instanceof HTMLButtonElement && submitter.value === 'agent'
+        ? 'agent'
+        : 'grounded'
     const content = question.trim()
     if (!content) {
       setError({
@@ -197,6 +228,7 @@ export function ChatPage() {
     const controller = new AbortController()
     activeRequest.current = controller
     setSending(true)
+    setSendingMode(submissionMode)
     setError(null)
     setCanceled(false)
     setOpenCitation(null)
@@ -213,17 +245,30 @@ export function ChatPage() {
         setConversations((current) => [conversation, ...current])
         setSelectedId(conversation.id)
       }
-      const response = await sendConversationMessage(
-        auth.accessToken,
-        conversationId,
-        content,
-        controller.signal,
-      )
-      const turn: ChatTurn = {
-        id: response.data.assistant_message_id,
-        question: content,
-        response: response.data,
-      }
+      const turn: ChatTurn =
+        submissionMode === 'agent'
+          ? await runConversationAgent(
+              auth.accessToken,
+              conversationId,
+              content,
+              controller.signal,
+            ).then((response) => ({
+              kind: 'agent' as const,
+              id: response.data.assistant_message_id,
+              question: content,
+              response: response.data,
+            }))
+          : await sendConversationMessage(
+              auth.accessToken,
+              conversationId,
+              content,
+              controller.signal,
+            ).then((response) => ({
+              kind: 'grounded' as const,
+              id: response.data.assistant_message_id,
+              question: content,
+              response: response.data,
+            }))
       setTurnsByConversation((current) => ({
         ...current,
         [conversationId]: [...(current[conversationId] ?? []), turn],
@@ -372,9 +417,19 @@ export function ChatPage() {
                     <p>{turn.question}</p>
                   </article>
                   <GroundedAnswer
-                    response={turn.response}
+                    response={
+                      turn.kind === 'agent'
+                        ? agentAnswer(turn.response)
+                        : turn.response
+                    }
                     onOpenEvidence={setOpenCitation}
                   />
+                  {turn.kind === 'agent' ? (
+                    <AgentTraceTimeline
+                      run={turn.response}
+                      onOpenEvidence={setOpenCitation}
+                    />
+                  ) : null}
                 </div>
               ))
             )}
@@ -383,10 +438,14 @@ export function ChatPage() {
                 <span className="loading-dot" aria-hidden="true" />
                 <div>
                   <strong>
-                    Retrieving authorized evidence and validating citations…
+                    {sendingMode === 'agent'
+                      ? 'Running a bounded agent flow through approved tools…'
+                      : 'Retrieving authorized evidence and validating citations…'}
                   </strong>
                   <small>
-                    Only a complete, validated response will be displayed.
+                    {sendingMode === 'agent'
+                      ? 'The run stops at configured limits and exposes only a sanitized timeline.'
+                      : 'Only a complete, validated response will be displayed.'}
                   </small>
                 </div>
               </section>
@@ -430,9 +489,20 @@ export function ChatPage() {
               <button
                 type="submit"
                 className="primary-button"
+                name="submission-mode"
+                value="grounded"
                 disabled={sending || creating}
               >
                 Ask copilot
+              </button>
+              <button
+                type="submit"
+                className="agent-button"
+                name="submission-mode"
+                value="agent"
+                disabled={sending || creating}
+              >
+                Run bounded agent
               </button>
             </div>
           </form>

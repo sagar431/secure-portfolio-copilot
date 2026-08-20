@@ -1,11 +1,13 @@
-# Step 6 Architecture
+# Step 7 Architecture
 
 ## Scope
 
 This document describes the Step 1 foundation, Step 2 identity/authorization, Step 3 governed
 synthetic-document ingestion, Step 4 secure chunk storage, Step 5 approved-version embeddings and
-authorization-first hybrid retrieval, and Step 6 non-agentic grounded chat with host-validated
-citations. MCP, memory, calculations, planning, tools, and an agent loop remain outside this scope.
+authorization-first hybrid retrieval, Step 6 non-agentic grounded chat, and Step 7 bounded
+single-agent orchestration through an embedded approved MCP gateway. Memory, calculations,
+arbitrary execution, remote/dynamic MCP, multi-agent coordination, and deployment remain outside
+this scope.
 
 ```mermaid
 flowchart LR
@@ -39,6 +41,17 @@ flowchart LR
     Gemini --> CitationValidator[Host citation validator]
     CitationValidator --> ChatRows[(Conversations + messages + safe traces)]
     CitationValidator --> Browser
+    Browser -->|bounded agent run| AgentAPI[Owned agent-run API]
+    AgentAPI --> Perception[Typed Perception]
+    Perception --> AgentPolicy[Host policy + request shortlist]
+    AgentPolicy --> Decision[Typed Decision: one action]
+    Decision --> MCPClient[Official in-process MCP client]
+    MCPClient --> MCPServer[Request-scoped MCP server]
+    MCPServer --> Gateway[ApprovedToolGateway]
+    Gateway --> DocTools[Authorized search or excerpt]
+    DocTools --> Observation[Strict structured observation]
+    Observation --> Perception
+    Decision -->|FINALIZE| CitationValidator
     Identity --> SQLAlchemy[SQLAlchemy async engine]
     RequestID --> Route[Typed health/readiness route]
     Route -->|/ready only| SQLAlchemy
@@ -341,6 +354,54 @@ flowchart TD
     Rebuild --> Persist[Persist messages + sanitized trace]
     Persist --> UI[Grounded answer + evidence drawer]
 ```
+
+## Bounded AgentLoop and MCP path
+
+The Session 10 reference was inspected read-only. Step 7 retains its useful single-session state,
+separate Perception/Decision stages, step-result feedback, plan versions, and timeline concept. It
+rejects `run_user_code`, `compile`/`exec`, generated Python, positional argument reconstruction,
+unbounded `while` execution, broad MCP discovery, raw console/session logs, unscoped global memory,
+shell/SQL/URL/path/browser/computer tools, and raw reasoning traces. No Session 10 module is imported
+or copied into production.
+
+`POST /api/conversations/{conversation_id}/agent-runs` first reloads the owned conversation and
+current immutable `AuthorizationContext`. Missing capability returns 403. Recognizable scope denial
+returns a policy/terminal trace without calling Perception, MCP, retrieval, or Gemini. Otherwise:
+
+1. Perception classifies the bounded question using a strict structured schema. It cannot authorize
+   or select/execute a tool.
+2. Host policy binds the immutable scope and obtains the deterministic request catalog from
+   `ApprovedToolGateway.authorized_catalog`.
+3. Decision receives only the permitted names and emits a one-to-three-step plan plus exactly one
+   `TOOL_CALL`, `FINALIZE`, `CLARIFY`, or `REFUSE`. Action JSON forbids authorization/execution
+   fields and must match a pending plan step.
+4. `AgentGatewayAdapter` strictly validates raw JSON before the MCP SDK can coerce types. It creates
+   a request-scoped official `Client(MCPServer)` whose closure owns scope, shortlist, and request ID.
+5. The server registers only the shortlisted subset of
+   `portfolio.search_authorized_documents` and `portfolio.get_document_excerpt`. The gateway again
+   checks name, shortlist, capability, input schema, timeout/retry, and output schema. Each adapter
+   reuses the Step 5 authorization/lifecycle SQL; missing and unauthorized excerpt IDs are identical
+   denials.
+6. A typed observation returns to step-result Perception before another Decision. Evidence receives
+   host `ev_N` IDs. Failed observations contain no evidence.
+7. Host counters stop after four tools, the initial search plus one semantic rewrite, one replan,
+   one transient retry per tool, or the total duration. Plan changes count as replans even if the
+   model omits its replan flag. Authorization denial is never retried.
+8. `FINALIZE` calls the existing grounded provider and Step 6 validator. Only a completed run may
+   carry claims/citations, and every citation is reconstructed from authorized observation evidence.
+
+The gateway catalog is statically owned and application startup validates both adapter definitions
+against the manifest. Duplicate names, unknown namespaces, missing tools, and input/output schema or
+capability mismatch raise a configuration error before the app is served. The automated MCP smoke
+uses the official in-process client, lists only one request-shortlisted tool, calls it, and strictly
+revalidates `structured_content`.
+
+The response trace is deliberately not the internal AgentSession. It projects only host UUID event
+IDs, stage/status, two exact approved action names, host `ev_N` references, duration, counters, and
+allow-listed reason/stopping codes. Queries, prompts, perceptions, plan text, action arguments,
+observations, excerpts, scope, paths, raw errors, answers, secrets, and rationale are absent. Step 7
+adds no database table: messages and metadata-only request traces use migration `0006`; the detailed
+timeline is response-only.
 
 ## Authorized reindex path
 

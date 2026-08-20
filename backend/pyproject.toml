@@ -20,6 +20,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0,<3",
     "uvicorn[standard]>=0.32,<1",
     "google-genai==2.16.0",
+    "mcp==2.0.0",
 ]
 
 [dependency-groups]

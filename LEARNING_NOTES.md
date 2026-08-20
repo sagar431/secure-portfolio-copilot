@@ -569,3 +569,87 @@ quality benchmark. Step 6 also has no retention/deletion workflow for stored con
 10. Why do automated tests use a fake provider while the live Gemini smoke remains separate?
 11. What happens when Alice asks for Atlas data or Orion Legal content?
 12. Why is Step 6 not an agent, memory system, calculation engine, or MCP implementation?
+
+## Step 7 — Bounded single-agent orchestration through MCP
+
+### Reuse audit: Session 10 as a lesson, not a dependency
+
+The read-only Session 10 audit found useful boundaries: one `AgentSession`, separate Perception and
+Decision calls, step-result Perception, plan versions, structured model classes, an MCP registry,
+and a visible timeline. Those ideas make the control flow explainable.
+
+Its unsafe mechanics were intentionally rejected: `run_user_code`, generated `CODE` blocks,
+`compile`/`exec`, positional argument reconstruction, shell/path/URL-capable tools, raw query/model/
+tool/result/error printing, global FAISS memory, raw session files, overwritten duplicate tool names,
+and loops that can force completion or run without reliable terminal limits. Step 7 is a rewrite
+with typed actions, host authority, strict schemas, bounded transitions, and safe projections; it
+does not import or copy Session 10.
+
+### Why the MCP gateway is a security boundary
+
+Decision is allowed to propose one action name and tool-specific data. It never receives or returns
+tenant, company, department, user, role, permission, or scope. The host derives the immutable
+`AuthorizationContext`, obtains a capability-filtered shortlist, and injects scope through the
+request-scoped MCP server closure. The model cannot call `Client`, execute a tool, install a tool, or
+change that closure.
+
+The official MCP SDK may coerce annotated arguments, so strictness must exist before the SDK as well
+as inside the gateway. `AgentGatewayAdapter` validates the original JSON action against the exact
+manifest first. The request-scoped server exposes only shortlisted tools; the gateway then checks
+name, shortlist, capability, input, timeout/retry, and output; the adapter finally applies Step 5
+database authorization. Tool hiding alone would not be sufficient.
+
+Startup validates the two owned definitions against the manifest. This catches duplicate names,
+unknown namespaces, missing entries, schema drift, and capability drift before the app serves
+requests. Tool errors become typed content-free observations rather than raw exceptions.
+
+### Why the loop remains deterministic around model calls
+
+Perception and Decision are real separate structured Gemini calls, but they do not own transitions.
+Host code requires one action to match a pending plan step and counts tool calls, semantic search
+rewrites, plan changes, retries, and elapsed time. A changed plan counts as a replan even if the model
+sets `replan=false`. Authorization denial stops immediately. Plan exhaustion never creates a final
+answer. Every path has one explicit terminal status.
+
+Observations return to step-result Perception before another Decision. Successful evidence is
+assigned host `ev_N` IDs; denied/failed observations contain none. `FINALIZE` is allowed only through
+the existing Step 6 generator and citation validator, so only a completed run may contain claims and
+host-reconstructed citations.
+
+### Why the developer trace is a projection
+
+Internal AgentSession state legitimately needs the question, structured observations, and
+authorized evidence while the request runs. The browser does not. The response timeline contains
+only host UUID event IDs, stage/status, two exact tool names, host `ev_N` references, durations,
+counters, and allow-listed reason/stopping codes. Model reason codes are replaced by host constants.
+The client rejects extra fields and even well-shaped but non-allow-listed identifiers.
+
+This protects against covert trace smuggling: a malicious model cannot encode a prompt or excerpt in
+an invented action name, event ID, evidence ID, stopping reason, or rationale field. The detailed
+timeline is not persisted; only existing conversation messages and metadata-only request traces are
+stored.
+
+### Current limitations
+
+The embedded MCP server is in-process and static. There is no remote transport, dynamic discovery,
+memory, financial calculation, sandbox, multi-agent coordination, or trace-history API. Perception/
+Decision quality is not an authorization boundary and the live smoke is one synthetic contract
+check, not a planning-quality benchmark. Message history is still not reloaded or supplied to the
+agent.
+
+### Questions Sagar should be able to answer
+
+1. Which Session 10 concepts were retained, and which execution/logging/memory patterns were rejected?
+2. Why must raw action JSON be validated before the MCP SDK sees it?
+3. Where is `AuthorizationScope` created, injected, and revalidated?
+4. Why does request-specific discovery not replace call-time authorization?
+5. Which two MCP tools exist, and why is their namespace static?
+6. What causes application startup to fail?
+7. How do max steps, search rewrites, replans, retries, and duration differ?
+8. Why is an unflagged changed plan still a replan?
+9. Why can a denial report one historical retry without retrying the denial itself?
+10. What returns to step-result Perception, and what is excluded from the public trace?
+11. How does the frontend prevent model text from being smuggled through trace identifiers?
+12. Why does finalization still use the Step 6 citation validator?
+13. Which state persists after an agent run, and which detailed state is response-only?
+14. Why is this one modular agent rather than a multi-agent system?

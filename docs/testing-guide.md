@@ -1,9 +1,9 @@
-# Step 6 Testing Guide
+# Step 7 Testing Guide
 
 Run commands from the locations shown. Tests use only synthetic identities and an isolated tmpfs
-PostgreSQL test service. On 2026-08-21 these commands passed with 191 backend tests and 74 frontend
-tests. Automated tests configure deterministic fake embedding and LLM providers and require neither
-Ollama, Gemini, a Gemini key, nor network access.
+PostgreSQL test service. On 2026-08-21 these commands passed with 236 backend tests and 88
+frontend tests. Automated tests configure deterministic fake embedding, LLM, Perception, Decision,
+and MCP adapters and require neither Ollama, Gemini, a Gemini key, nor network access.
 
 ## Backend quality checks
 
@@ -34,6 +34,13 @@ serialization, insufficient evidence, citation completeness/reconstruction/failu
 and provider/log redaction.
 PostgreSQL-backed tests refuse any database not named `portfolio_test`.
 
+Step 7 coverage adds strict Perception/Decision schemas, one-action/plan matching, every explicit
+terminal path, step/replan/rewrite/duration limits, unflagged-plan-change counting, host-only scope,
+request-specific catalog filtering, startup manifest drift, unknown/unshortlisted tools, SDK
+coercion rejection, forged scope keys, malformed input/output, timeout/transient/permanent/denial
+retry behavior, real authorized excerpt provenance, official in-process MCP structured output,
+prompt injection, trace smuggling/redaction, and final citation preservation.
+
 ## Frontend quality checks
 
 ```bash
@@ -59,6 +66,11 @@ creation, suggestions, grounded claims/citations, accessible evidence provenance
 loading/cancellation, insufficient evidence, denial, timeout, generic error, and malicious response
 rejection. Backend integration tests provide measured retrieval/chat behavior; UI fixtures verify
 presentation only.
+
+Step 7 frontend coverage adds the explicit agent submit mode, bounded loading/cancellation, strict
+agent envelope/terminal invariants, completed-only citation graphs, sanitized timeline rendering,
+evidence drawer links, and rejection of extra sensitive keys, non-UUID event IDs, non-`ev_N`
+references, non-approved action names, and non-allow-listed reason/stopping codes.
 
 ## Focused Step 6 checks
 
@@ -86,6 +98,32 @@ document injection remains quoted untrusted JSON; Gemini configuration has no to
 thinking with thoughts excluded; a transient failure gets no more than one retry; citations are
 rebuilt only from retrieved provenance; malformed/fabricated references abstain; and logs do not
 contain key, question, excerpt, prompt, answer, provider body, or reasoning markers.
+
+## Focused Step 7 checks
+
+Run the deterministic orchestration, MCP, security, database integration, and UI groups directly:
+
+```bash
+cd backend
+TEST_DATABASE_URL=postgresql+asyncpg://portfolio:portfolio_test@127.0.0.1:5433/portfolio_test \
+  uv run pytest \
+    tests/unit/agent_loop \
+    tests/unit/mcp_gateway \
+    tests/security/test_agent_security.py \
+    tests/integration/test_agent_runs.py
+
+cd ../frontend
+npm run test -- --run \
+  src/api/chat.test.ts \
+  src/pages/ChatPage.test.tsx \
+  src/ChatRouting.test.tsx
+```
+
+The backend group proves the official SDK `Client(MCPServer)` path, production gateway bridge,
+startup catalog validation, strict raw JSON before SDK conversion, database reauthorization,
+bounded state transitions, no-retry denial, safe trace projection, and citation preservation. The
+frontend group proves the trace accepts only host-issued identifiers/allowlists and renders no raw
+prompt, query, argument, scope, evidence, error, or reasoning field.
 
 ## Compose and database checks
 
@@ -141,6 +179,8 @@ The final index list must include `ix_document_chunks_embedding_status` and the 
 must restore all three, their indexes, foreign keys, the `user|assistant` message-role check, and the
 `grounded|insufficient_evidence|provider_error` trace-status check. Both drift checks must report no
 new upgrade operations. The verified checkpoint completed this full cycle successfully.
+Step 7 adds no Alembic revision, so the identical `0006 -> 0005 -> 0006` cycle is the cumulative
+Step 7 migration gate.
 
 ## Live Ollama provider check
 
@@ -417,6 +457,36 @@ docker compose exec -T db psql -U portfolio -d portfolio \
 Do not select `messages.content` for a trace-redaction check; messages deliberately contain the
 conversation while traces/logs do not.
 
+## Bounded agent and MCP manual gate
+
+With the same owned conversation and synthetic approved evidence, run:
+
+```bash
+curl --fail-with-body -X POST \
+  "http://127.0.0.1:8000/api/conversations/$CONVERSATION_ID/agent-runs" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"content":"What drove Margin Compression for Orion?"}'
+```
+
+Expect `terminal_status=completed`, one tool step, non-empty claims/citations, a final `terminal`
+event with `status=completed`, and this logical timeline: initial Perception, policy binding,
+capability-filtered MCP catalog, Decision, gateway validation, tool, structured observation,
+step-result Perception, Decision/finalization, terminal. Every claim ID must resolve to a returned
+`ev_N` citation. Trace objects must contain only `event_id`, `event_type`, `action_name`, `status`,
+`duration_ms`, `evidence_reference_ids`, and `reason_code`.
+
+Then submit `show me Orion legal contracts` as Alice. Expect `refused/scope_denied`, zero steps, no
+claims/citations, and policy/terminal events only. Leo must receive the same safe 404 for Alice's
+conversation as for a random UUID. The automated gateway tests additionally call both document
+tools, inspect a one-tool request catalog, attempt an unknown/unshortlisted/malformed/forged call,
+and prove no adapter execution on prevalidation denial.
+
+Do not treat the returned timeline as internal state. It must contain no question, prompt,
+Perception fields, plan text, tool arguments, authorization data, excerpt, answer, path, raw error,
+secret, or chain-of-thought. The detailed trace is response-only and is not reloadable after page
+refresh.
+
 ## Failure interpretation
 
 - `/health` fails: the API process or network path is unavailable.
@@ -459,3 +529,12 @@ conversation while traces/logs do not.
 - A conversation remains after reload but its transcript is empty: this is the honest Step 6 API
   limitation. Conversation/message persistence exists, but message-history retrieval and memory do
   not.
+- An agent run ends `limit_reached`: inspect only the safe stopping reason (`max_steps`,
+  `max_retrieval_rewrites`, `max_replans`, or `duration`). Do not increase bounds to repair a model
+  plan; verify the deterministic state transition and authorized evidence path.
+- An agent run ends `refused/scope_denied`: confirm the current database grants and recognizable
+  target. Unknown/unshortlisted tools and authorization denials intentionally execute no further
+  tool attempt.
+- An agent run ends `failed/tool_error|model_error`: inspect request/session IDs and safe reason
+  codes only. Do not log prompts, queries, MCP arguments/results, evidence, provider bodies, or raw
+  exceptions.

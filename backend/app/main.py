@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes.agent_runs import router as agent_runs_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.conversations import router as conversations_router
 from app.api.routes.development import router as development_router
@@ -13,6 +14,7 @@ from app.core.config import Settings, get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging
 from app.db.session import engine
+from app.mcp_gateway.adapters import validate_production_tool_catalog
 from app.middleware.request_id import RequestIDMiddleware
 
 
@@ -25,6 +27,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 def create_app(settings: Settings | None = None) -> FastAPI:
     active_settings = settings or get_settings()
     configure_logging(active_settings.log_level)
+    validate_production_tool_catalog()
 
     application = FastAPI(
         title=active_settings.app_name,
@@ -44,6 +47,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(auth_router)
     application.include_router(documents_router)
     application.include_router(conversations_router)
+    application.include_router(agent_runs_router)
     if active_settings.app_env in {"development", "test"}:
         application.include_router(development_router)
     return application

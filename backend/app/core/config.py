@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=30.0, ge=1.0, le=60.0)
     llm_max_output_tokens: int = Field(default=1024, ge=256, le=2048)
     llm_max_evidence_chunks: int = Field(default=5, ge=1, le=10)
+    agent_max_steps: int = Field(default=4, ge=1, le=4)
+    agent_max_replans: int = Field(default=1, ge=0, le=1)
+    agent_max_retrieval_rewrites: int = Field(default=1, ge=0, le=1)
+    agent_max_duration_seconds: float = Field(default=90.0, ge=5.0, le=120.0)
+    agent_tool_timeout_seconds: float = Field(default=10.0, ge=0.1, le=30.0)
+    agent_tool_max_transient_retries: int = Field(default=1, ge=0, le=1)
     cors_origins: list[str] = [
         "http://127.0.0.1:3000",
         "http://localhost:3000",
