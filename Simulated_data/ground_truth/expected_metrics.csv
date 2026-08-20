@@ -1,0 +1,23 @@
+metric_id,tenant,period,metric,value,unit,tolerance,document_id,evidence_locator,calculation
+ORION-REV-2024,Orion Capital,FY2024,Revenue,120.00,INR crore,0.01,ORION-FIN-2025-001,P&L!B4,Direct value
+ORION-REV-2025,Orion Capital,FY2025,Revenue,150.00,INR crore,0.01,ORION-FIN-2025-001,P&L!C4,Direct value
+ORION-REV-GROWTH,Orion Capital,FY2025,Revenue Growth,25.00,percent,0.01,ORION-FIN-2025-001,Metrics!C4,(150/120)-1
+ORION-EBITDA-2024,Orion Capital,FY2024,EBITDA,18.00,INR crore,0.01,ORION-FIN-2025-001,P&L!B8,Direct value
+ORION-EBITDA-2025,Orion Capital,FY2025,EBITDA,15.00,INR crore,0.01,ORION-FIN-2025-001,P&L!C8,Direct value
+ORION-EBITDA-MARGIN-2025,Orion Capital,FY2025,EBITDA Margin,10.00,percent,0.01,ORION-FIN-2025-001,Metrics!C5,15/150
+ORION-NET-MARGIN-2025,Orion Capital,FY2025,Net Profit Margin,3.00,percent,0.01,ORION-FIN-2025-001,Metrics!C6,4.5/150
+ORION-CASH-2025,Orion Capital,FY2025,Closing Cash,18.00,INR crore,0.01,ORION-FIN-2025-001,Cash Flow!C11,Direct value
+ORION-DEBT-2025,Orion Capital,FY2025,Bank Debt,55.00,INR crore,0.01,ORION-FIN-2025-001,Balance Sheet!C9,Direct value
+ORION-DEBT-EQUITY-2025,Orion Capital,FY2025,Debt to Equity,1.375,x,0.001,ORION-FIN-2025-001,Metrics!C7,55/40
+ORION-RUNWAY-2025,Orion Capital,FY2025,Stress-case Cash Runway,6.00,months,0.01,ORION-FIN-2025-001,Metrics!C8,18/3
+ATLAS-REV-2024,Atlas Investments,FY2024,Revenue,90.00,INR crore,0.01,ATLAS-FIN-2025-001,P&L!B4,Direct value
+ATLAS-REV-2025,Atlas Investments,FY2025,Revenue,108.00,INR crore,0.01,ATLAS-FIN-2025-001,P&L!C4,Direct value
+ATLAS-REV-GROWTH,Atlas Investments,FY2025,Revenue Growth,20.00,percent,0.01,ATLAS-FIN-2025-001,Metrics!C4,(108/90)-1
+ATLAS-EBITDA-2024,Atlas Investments,FY2024,EBITDA,13.50,INR crore,0.01,ATLAS-FIN-2025-001,P&L!B8,Direct value
+ATLAS-EBITDA-2025,Atlas Investments,FY2025,EBITDA,18.36,INR crore,0.01,ATLAS-FIN-2025-001,P&L!C8,Direct value
+ATLAS-EBITDA-MARGIN-2025,Atlas Investments,FY2025,EBITDA Margin,17.00,percent,0.01,ATLAS-FIN-2025-001,Metrics!C5,18.36/108
+ATLAS-NET-MARGIN-2025,Atlas Investments,FY2025,Net Profit Margin,8.7222,percent,0.001,ATLAS-FIN-2025-001,Metrics!C6,9.42/108
+ATLAS-CASH-2025,Atlas Investments,FY2025,Closing Cash,28.00,INR crore,0.01,ATLAS-FIN-2025-001,Cash Flow!C11,Direct value
+ATLAS-DEBT-2025,Atlas Investments,FY2025,Bank Debt,20.00,INR crore,0.01,ATLAS-FIN-2025-001,Balance Sheet!C9,Direct value
+ATLAS-DEBT-EQUITY-2025,Atlas Investments,FY2025,Debt to Equity,0.40,x,0.001,ATLAS-FIN-2025-001,Metrics!C7,20/50
+ATLAS-RUNWAY-2025,Atlas Investments,FY2025,Stress-case Cash Runway,17.50,months,0.01,ATLAS-FIN-2025-001,Metrics!C8,28/1.6

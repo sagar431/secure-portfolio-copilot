@@ -1,0 +1,8 @@
+{
+  "document_id": "ORION-BAD-METADATA-001",
+  "declared_tenant": "Atlas Investments",
+  "filename_implied_tenant": "Orion Capital",
+  "department": "Finance",
+  "expected_ingestion_result": "REJECT",
+  "expected_error_code": "TENANT_METADATA_MISMATCH"
+}

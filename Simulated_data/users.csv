@@ -1,0 +1,7 @@
+user_id,display_name,tenant,department,role,query_scopes,upload_scopes,notes
+nora,Nora Admin,Platform,Administration,Admin,None,"Orion Capital;Atlas Investments","May manage uploads and grants; upload authority does not imply query access"
+alice,Alice Finance Analyst,Orion Capital,Finance,Analyst,"Orion Finance;Orion Shared",None,"Must not retrieve Orion Legal or any Atlas content"
+leo,Leo Legal Counsel,Orion Capital,Legal,Counsel,"Orion Legal;Orion Shared",None,"Must not retrieve Orion Finance or any Atlas content"
+maya,Maya IC Reviewer,Orion Capital,Investment Committee,Reviewer,"Orion Finance;Orion Legal;Orion Shared",None,"Explicit cross-department read grant within Orion only"
+amir,Amir Finance Analyst,Atlas Investments,Finance,Analyst,"Atlas Finance;Atlas Shared",None,"Must not retrieve Atlas Legal or any Orion content"
+lina,Lina Legal Counsel,Atlas Investments,Legal,Counsel,"Atlas Legal;Atlas Shared",None,"Must not retrieve Atlas Finance or any Orion content"

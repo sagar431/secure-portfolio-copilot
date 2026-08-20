@@ -1,0 +1,2 @@
+run_id,case_id,timestamp,user_id,actual_status,actual_route,actual_document_ids,actual_answer,actual_citations,latency_ms,input_tokens,output_tokens,passed,failure_reason
+demo-run-001,E001,2026-08-19T12:00:00Z,alice,,,,,,,,,,

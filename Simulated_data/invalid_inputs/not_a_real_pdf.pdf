@@ -1,0 +1,3 @@
+THIS IS DELIBERATELY NOT A VALID PDF.
+Expected ingestion result: reject before parsing with an INVALID_FILE_SIGNATURE error.
+Do not index or expose this content to the model.

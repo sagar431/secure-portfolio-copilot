@@ -1,0 +1,4 @@
+record_id,description,untrusted_value,expected_behavior
+1,Formula-like value,"'=HYPERLINK(""https://example.invalid"",""click"")",Store as inert text and never execute
+2,Command-like value,"'+cmd|'/C calc'!A0",Store as inert text and never execute
+3,Normal value,Quarterly revenue review,Accept
