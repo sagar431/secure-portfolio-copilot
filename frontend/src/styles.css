@@ -113,9 +113,191 @@ h1 {
   color: #65746e;
 }
 
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.header-session {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  color: #bad7ca;
+  font-size: 0.875rem;
+}
+
+.logout-button {
+  padding: 0.55rem 0.8rem;
+  border: 1px solid #6fa590;
+  border-radius: 0.45rem;
+  color: #effaf4;
+  background: transparent;
+}
+
+.login-page {
+  display: grid;
+  min-height: 100vh;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(360px, 1.1fr);
+  gap: clamp(2rem, 6vw, 6rem);
+  align-items: center;
+  padding: clamp(2rem, 7vw, 6rem);
+  background: linear-gradient(135deg, #edf5f0 0%, #dcebe3 100%);
+}
+
+.login-card,
+.demo-users,
+.scope-panel {
+  padding: clamp(1.5rem, 4vw, 2.5rem);
+  border: 1px solid #c1d8cd;
+  border-radius: 1rem;
+  background: rgb(255 255 255 / 90%);
+  box-shadow: 0 20px 60px rgb(20 72 54 / 10%);
+}
+
+.login-card h1 {
+  max-width: 13ch;
+  font-size: clamp(2rem, 5vw, 3.75rem);
+}
+
+.login-card form,
+.login-card label {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.login-card form {
+  gap: 1rem;
+}
+
+.login-card input {
+  width: 100%;
+  padding: 0.8rem;
+  border: 1px solid #91ad9f;
+  border-radius: 0.5rem;
+  background: #fff;
+}
+
+.login-card button,
+.demo-user-card {
+  padding: 0.8rem 1rem;
+  border: 1px solid #236c53;
+  border-radius: 0.55rem;
+}
+
+.login-card button {
+  color: #fff;
+  background: #165d47;
+}
+
+.development-badge {
+  display: inline-block;
+  margin: 0;
+  padding: 0.35rem 0.55rem;
+  border-radius: 999px;
+  color: #7a3c06;
+  background: #fff0d5;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.demo-user-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.demo-user-card {
+  display: grid;
+  gap: 0.25rem;
+  text-align: left;
+  color: #17211d;
+  background: #f7fbf8;
+}
+
+.demo-user-card:hover,
+.demo-user-card:focus-visible {
+  background: #e4f2eb;
+}
+
+.demo-user-card span,
+.demo-user-card small {
+  color: #52645c;
+}
+
+.scope-panel {
+  display: grid;
+  gap: 1.5rem;
+  margin-top: 2rem;
+}
+
+.scope-panel h2,
+.scope-panel h3,
+.scope-panel p {
+  margin-block: 0;
+}
+
+.identity-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.identity-grid div,
+.scope-list article {
+  padding: 1rem;
+  border-radius: 0.65rem;
+  background: #edf5f0;
+}
+
+.identity-grid dt {
+  color: #52645c;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.identity-grid dd {
+  margin: 0.35rem 0 0;
+  text-transform: capitalize;
+}
+
+.scope-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.scope-list article {
+  display: grid;
+  gap: 0.5rem;
+}
+
 @media (max-width: 560px) {
   .site-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .header-session,
+  .identity-grid {
+    align-items: flex-start;
+    grid-template-columns: 1fr;
+  }
+
+  .login-page,
+  .demo-user-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 860px) {
+  .login-page {
+    grid-template-columns: 1fr;
   }
 }

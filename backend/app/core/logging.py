@@ -31,3 +31,7 @@ def configure_logging(level: str) -> None:
     root_logger.handlers.clear()
     root_logger.addHandler(handler)
     root_logger.setLevel(level.upper())
+
+    # Uvicorn's default access logger includes raw query strings. The application
+    # middleware emits the approved metadata-only request event instead.
+    logging.getLogger("uvicorn.access").disabled = True

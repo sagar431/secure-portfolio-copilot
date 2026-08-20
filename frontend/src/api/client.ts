@@ -16,7 +16,7 @@ export class ApiError extends Error {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
@@ -37,16 +37,32 @@ function isSuccessEnvelope<T>(value: unknown): value is ApiSuccessEnvelope<T> {
   )
 }
 
-export async function getJson<T>(
+interface RequestOptions {
+  method?: 'GET' | 'POST'
+  body?: unknown
+  token?: string
+  signal?: AbortSignal
+}
+
+export async function requestJson<T>(
   path: string,
-  signal?: AbortSignal,
+  options: RequestOptions = {},
 ): Promise<ApiSuccessEnvelope<T>> {
   let response: Response
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  if (options.body !== undefined) {
+    headers['Content-Type'] = 'application/json'
+  }
+  if (options.token) {
+    headers.Authorization = `Bearer ${options.token}`
+  }
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      signal,
+      method: options.method ?? 'GET',
+      headers,
+      body:
+        options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: options.signal,
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
@@ -93,4 +109,8 @@ export async function getJson<T>(
     )
   }
   return body
+}
+
+export function getJson<T>(path: string, signal?: AbortSignal) {
+  return requestJson<T>(path, { signal })
 }

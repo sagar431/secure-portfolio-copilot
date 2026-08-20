@@ -1,8 +1,16 @@
+import logging
+
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.main import create_app
+
+
+def test_default_server_access_log_is_disabled() -> None:
+    create_app()
+
+    assert logging.getLogger("uvicorn.access").disabled
 
 
 @pytest.mark.asyncio
