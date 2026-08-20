@@ -1,4 +1,4 @@
-# Step 5 Security Invariants
+# Step 6 Security Invariants
 
 These rules apply now and must remain true as later milestones are approved.
 
@@ -36,8 +36,8 @@ These rules apply now and must remain true as later milestones are approved.
     passwords. Demo cards are excluded from production frontend builds. Production rejects the
     default development JWT key and password login.
 17. **Capability and target authorization.** Every document-management operation requires a current
-   database-derived `MANAGE_UPLOADS` grant for the exact workspace/company. Route hiding is not an
-   authorization boundary, and upload targets are checked before file bytes are read.
+    database-derived `MANAGE_UPLOADS` grant for the exact workspace/company. Route hiding is not an
+    authorization boundary, and upload targets are checked before file bytes are read.
 18. **Development database only.** Compose defaults are local credentials and must not be reused in
     shared or production environments.
 19. **Canonical metadata only.** Tenant/company IDs, department, visibility, classification,
@@ -130,9 +130,59 @@ These rules apply now and must remain true as later milestones are approved.
 50. **Honest evaluation state.** Checked-in curated synthetic queries report their measured
     Recall@5, expected hit, and authorization-leak count. Ad hoc queries report `not_run`; UI fixtures
     are not represented as additional measured results.
-51. **No later capabilities.** This step contains no reranker, semantic query rewrite, generated
-    answer, LLM, MCP, memory, calculation, arbitrary code execution, agent, cloud provider, or
-    production search endpoint.
+51. **No Step 5 overclaim.** The curated retrieval gate is narrow. It does not establish broad
+    semantic quality, reranking quality, or production readiness.
+52. **Owned conversations.** Conversation create/list/message operations derive tenant and user from
+    the authenticated database context. Lookup includes conversation, tenant, and user; a foreign ID
+    returns the same safe 404 as a missing ID.
+53. **Capability before chat work.** `QUERY_DOCUMENTS` is required before a chat message can invoke
+    retrieval or generation. Missing capability returns a generic denial before either provider is
+    called.
+54. **Recognizable scope denial before retrieval.** Explicit tenant/company/department target hints
+    outside the current query grants produce an abstention without retrieval or Gemini. This
+    conservative heuristic is defense in depth; it never replaces Step 5 SQL authorization.
+55. **Authorized retrieval before prompting.** Every evidence row must come from
+    `AuthorizedSearchService` under the current immutable `AuthorizationContext`. Authorization and
+    lifecycle filtering finish before document content can enter the prompt.
+56. **No model-defined authority.** The LLM request contains question and authorized evidence only.
+    It cannot supply or alter tenant, company, department, user, role, capability, conversation
+    ownership, retrieval filters, or authorization scope.
+57. **Documents are untrusted data.** Evidence is JSON-serialized under an explicit untrusted-data
+    label. The system instruction requires ignoring embedded instructions, policies, role changes,
+    prompt text, URLs, files, tools, web search, code execution, and hidden assumptions.
+58. **No Gemini tools.** The official Google GenAI request supplies neither `tools` nor
+    `tool_config`. It enables no web/file search, URL access, function call, computer use, or code
+    execution. Medium thinking excludes thoughts from the response.
+59. **Bounded provider call.** Question length, evidence count, excerpt size, output tokens, timeout,
+    response schema, candidate count, and temperature are bounded. SDK attempts equal one; only a
+    transient failure may receive one application retry. Authorization denials never retry.
+60. **Provider output is untrusted.** Structured output is locally validated. Unsupported status,
+    empty claims, oversized/empty claim text, missing references, unknown evidence IDs, duplicate
+    evidence identity, or invalid response shape fails closed.
+61. **Host-owned citations.** Gemini returns evidence references, not trusted citation DTOs. The
+    backend reconstructs title, document/version/chunk IDs, version, excerpt, and page or
+    sheet/row/cell location exclusively from the retrieved evidence map.
+62. **Complete claim references.** Every returned grounded claim has at least one retrieved evidence
+    ID. Every citation returned to the browser is referenced by a claim. Insufficient-evidence
+    responses contain neither claims nor citations.
+63. **Controlled abstention.** Missing/low-relevance evidence, recognizable unauthorized targets,
+    inconsistent retrieval provenance, and citation-validation failure return the same bounded
+    insufficient-evidence answer without restricted content or fabricated citations.
+64. **Safe provider failure.** Provider timeout maps to generic 504; unavailable/rejected/invalid
+    provider behavior maps to generic 503. Raw upstream errors, bodies, keys, prompts, evidence,
+    generated output, and exception text never cross the API boundary.
+65. **Sanitized chat traces and logs.** Trace rows/logs contain only correlation/ownership IDs,
+    model, safe status/reason, permitted retrieved IDs, token counts, latency, retry count, and
+    bounded counts. They contain no question, prompt, excerpt, answer, provider body, key, or hidden
+    reasoning. Conversation `messages` are intentionally separate persisted content.
+66. **Strict inert frontend.** The chat client rejects extra response fields, malformed provenance,
+    mismatched conversation IDs, and missing/unknown/duplicate/unreferenced citations. React renders
+    questions, answers, claims, limitations, titles, and excerpts as text rather than HTML.
+67. **No partial UI answer.** Loading, cancellation, timeout, denial, and error paths do not render a
+    partial provider response or unvalidated citation. Browser cancellation is a UI guarantee, not a
+    claim that already-started upstream work was canceled.
+68. **No later capabilities.** Step 6 has no MCP, Perception, Decision, plan, tool calling, memory,
+    deterministic financial calculation, arbitrary execution, cloud deployment, or agent loop.
 
 Automated tests cover password/token primitives, exact seeded scopes, policy reason codes, generic
 login errors, forged fields, malformed/expired/wrong-issuer/wrong-audience/wrong-signature tokens,
@@ -143,6 +193,9 @@ preview provenance, inert formulas, deletion, deterministic chunk provenance, me
 approved-only creation, atomic replacement, rejection/deletion, mandatory repository scope,
 six-user isolation, forged search values, query/result/excerpt bounds, safe audit/logging,
 provider/model validation, bounded batching, production/provider isolation, authorization-before-
-vector SQL construction, embedding invalidation/backfill, citation response validation, and
-capability-gated frontend behavior. Final verification passes 167 backend and 47 frontend tests,
-plus migration reversibility/drift, live Ollama, production exclusion, and integrity gates.
+vector SQL construction, embedding invalidation/backfill, citation response validation,
+conversation ownership, authorization-before-prompting, scope preflight, prompt injection, Gemini
+no-tool/bound/retry behavior, fake-provider grounded answers, citation reconstruction and failure,
+sanitized trace/log behavior, and all chat UI states. Final Step 6 verification passes 191 backend
+and 74 frontend tests, migration `0006` downgrade/re-upgrade/drift checks, live Ollama and minimal
+synthetic Gemini smokes, production/integrity gates, and zero-vulnerability frontend audit.

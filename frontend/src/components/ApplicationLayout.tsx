@@ -24,6 +24,7 @@ export function ApplicationLayout() {
           {canManageUploads ? (
             <Link to="/admin/documents">Document ingestion</Link>
           ) : null}
+          {canQueryDocuments ? <Link to="/chat">Grounded chat</Link> : null}
           {import.meta.env.DEV && canQueryDocuments ? (
             <Link to="/development/search">Authorized search</Link>
           ) : null}
@@ -39,7 +40,7 @@ export function ApplicationLayout() {
         <Outlet />
       </main>
       <footer className="site-footer">
-        Synthetic-data development environment · Secure retrieval Step 4
+        Synthetic-data development environment · Grounded portfolio chat
       </footer>
     </div>
   )

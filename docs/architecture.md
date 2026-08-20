@@ -1,10 +1,11 @@
-# Step 5 Architecture
+# Step 6 Architecture
 
 ## Scope
 
 This document describes the Step 1 foundation, Step 2 identity/authorization, Step 3 governed
-synthetic-document ingestion, Step 4 secure chunk storage, and Step 5 approved-version embeddings,
-authorization-first hybrid retrieval, citation DTOs, and curated top-five evaluation.
+synthetic-document ingestion, Step 4 secure chunk storage, Step 5 approved-version embeddings and
+authorization-first hybrid retrieval, and Step 6 non-agentic grounded chat with host-validated
+citations. MCP, memory, calculations, planning, tools, and an agent loop remain outside this scope.
 
 ```mermaid
 flowchart LR
@@ -29,6 +30,15 @@ flowchart LR
     Scope --> Search[Authorization-first hybrid repository]
     Search --> Chunks
     Search -->|query text only| Embedder
+    Browser -->|owned conversation + question| ChatAPI[Grounded chat API]
+    ChatAPI --> Scope
+    ChatAPI --> ScopePreflight[Deterministic scope preflight]
+    ScopePreflight --> Search
+    Search -->|authorized evidence only| Prompt[Untrusted-evidence JSON prompt]
+    Prompt --> Gemini[Official Gemini adapter; no tools]
+    Gemini --> CitationValidator[Host citation validator]
+    CitationValidator --> ChatRows[(Conversations + messages + safe traces)]
+    CitationValidator --> Browser
     Identity --> SQLAlchemy[SQLAlchemy async engine]
     RequestID --> Route[Typed health/readiness route]
     Route -->|/ready only| SQLAlchemy
@@ -127,6 +137,21 @@ text. Checked-in curated queries return measured Recall@5 and authorization-leak
 queries return `not_run`. Production frontend builds omit the route, navigation, page, and API
 module.
 
+The `/chat` route mounts only for a current `QUERY_DOCUMENTS` capability. It loads an owner-scoped
+conversation list, allows explicit or automatic conversation creation, and keeps this browser
+session's turns by conversation. Submitted questions are normalized and bounded to 1,000
+characters. An abort controller supports cancellation; the transcript shows separate loading,
+empty, canceled, insufficient-evidence, denial, timeout, and generic-error states without partial
+provider output.
+
+Grounded responses render answer text, supported claims, inline evidence buttons, and limitations.
+The evidence drawer displays the authorized excerpt plus document/version/chunk and page or
+sheet/row/cell provenance, closes on Escape/backdrop/button, and restores focus. The client accepts
+only exact response fields and validates UUIDs, bounds, timestamps, coordinate shape, unique
+citation IDs, complete claim/citation set equality, and conversation identity. It performs no
+authorization filtering and renders all strings as inert React text. The list API currently returns
+summaries only, so a page reload cannot restore older messages.
+
 ## Document ingestion path
 
 1. The route validates strict JSON metadata inside multipart form data, validates the idempotency
@@ -187,7 +212,12 @@ a generated `TSVECTOR`, an ACL/lifecycle B-tree index, and a GIN full-text index
 embedding status, consistency constraints, a status index, and an HNSW cosine index. Its
 `PENDING` server default makes pre-existing Step 4 chunks explicit reindex candidates. The
 development seed writes only synthetic identity rows; documents and chunks are created through
-governed ingestion. `/ready` still executes only `SELECT 1`.
+governed ingestion. Migration `20260821_0006` adds `conversations`, `messages`, and
+`chat_request_traces`. Conversations bind tenant/user ownership and activity. Messages bind a
+conversation, tenant, user, `user|assistant` role, content, request ID, and creation time. Traces
+bind request/conversation/tenant/user and contain only model, safe status/reason, permitted
+retrieved document/chunk IDs, optional token counts, latency, retry count, and time. `/ready` still
+executes only `SELECT 1`.
 
 ## Embedding provider boundary
 
@@ -245,6 +275,73 @@ flowchart TD
     Limit --> Citation[Bounded result + citation DTO]
 ```
 
+## LLM provider and prompt boundary
+
+`LLMProvider` accepts a normalized question plus a tuple of host-owned `GroundedEvidence` and
+returns a structured answer draft plus safe usage metadata. The deterministic fake adapter is used
+by automated tests. The disabled adapter fails closed. The real adapter uses the pinned official
+`google-genai` SDK with a key read only from environment-backed settings.
+
+The current model contract is fixed to `gemini-3.7-flash` and medium thinking. Generation uses
+temperature zero, one candidate, JSON MIME/schema output, thoughts excluded, a configurable
+256–2,048-token output bound (default 1,024), and a 1–60-second timeout (default 30). SDK retry
+attempts are set to one; the adapter itself retries at most once and only for timeout/rate-limit/
+server-class transient failures. Safe error categories are timeout, transient, rejected, invalid
+response, unavailable, and disabled. Upstream bodies and exception messages do not cross the
+provider boundary.
+
+No `tools` or `tool_config` is passed. The application enables no Gemini web search, URL/file
+access, code execution, computer use, file search, or function calling. Evidence enters the prompt
+only as JSON under `authorized_untrusted_evidence`; excerpts are `quoted_excerpt` values and the
+system instruction says all embedded commands, policies, role changes, and prompt text are data to
+ignore. The prompt asks for evidence IDs rather than full citation objects.
+
+## Grounded chat path
+
+1. FastAPI authenticates the bearer subject and reloads current database grants.
+2. Conversation create/list derives tenant and owner from that immutable context. Message creation
+   loads the conversation by conversation ID, tenant ID, and user ID; missing and foreign IDs are
+   indistinguishable safe 404s.
+3. The service requires `QUERY_DOCUMENTS` before adding a message, retrieval, or generation. A
+   deterministic department/target preflight recognizes explicit requests outside current scope
+   and persists an abstention without calling search or Gemini.
+4. The Step 5 `AuthorizedSearchService` receives the trusted context, question, request ID, and the
+   configured evidence limit (default five). It embeds the query and returns only rows selected
+   after materialized database authorization and lifecycle predicates.
+5. Low-relevance results are dropped. Remaining results must have internally identical
+   result/citation/source provenance before the host assigns `ev_1`, `ev_2`, and so on. Any
+   inconsistency yields no prompt evidence and a controlled abstention.
+6. The provider receives only the question and those evidence objects. No identity, role, tenant,
+   company, department, capability, or scope is model-generated or model-editable.
+7. Host validation accepts only a supported draft with non-empty bounded claims. Each claim must
+   name at least one unique evidence ID, and all IDs must exist in the request evidence map.
+8. The host reconstructs citation DTOs from the evidence map. Missing, unknown, fabricated, or
+   incomplete references and an unsupported provider status produce `insufficient_evidence` with
+   no claims or citations. The validator proves reference/provenance integrity, not semantic
+   entailment or numeric correctness.
+9. Grounded/abstaining paths commit user and assistant messages plus one sanitized trace. A provider
+   failure commits the user message and `provider_error` trace, then returns a generic 503 or 504.
+10. Logs emit only request/conversation IDs, safe status/reason codes, and evidence/citation counts.
+    They exclude keys, questions, prompts, excerpts, answers, provider output, and reasoning.
+
+```mermaid
+flowchart TD
+    Question[Owned conversation + bounded question] --> Capability{QUERY_DOCUMENTS?}
+    Capability -->|no| Deny[Generic 403; no retrieval/provider]
+    Capability -->|yes| Preflight{Recognizable target in scope?}
+    Preflight -->|no| Abstain[Persist controlled abstention + safe trace]
+    Preflight -->|yes| Retrieval[Step 5 AuthorizedSearchService]
+    Retrieval --> Evidence{Sufficient consistent evidence?}
+    Evidence -->|no| Abstain
+    Evidence -->|yes| JSON[Authorized evidence as untrusted JSON]
+    JSON --> Gemini[Gemini structured draft; no tools]
+    Gemini --> Validate{All claims cite retrieved IDs?}
+    Validate -->|no| Abstain
+    Validate -->|yes| Rebuild[Host rebuilds exact citation provenance]
+    Rebuild --> Persist[Persist messages + sanitized trace]
+    Persist --> UI[Grounded answer + evidence drawer]
+```
+
 ## Authorized reindex path
 
 `POST /api/development/reindex-embeddings` exists only in development/test and accepts no body.
@@ -252,8 +349,7 @@ The route first requires at least one database-derived manageable pair. Its quer
 most `EMBEDDING_MAX_CHUNKS` `PENDING`/`FAILED` rows that are active, current, approved, non-deleted,
 inside an admin `MANAGE_UPLOADS` workspace/company grant, and equal to authoritative ACL/lifecycle
 rows. `FOR UPDATE SKIP LOCKED` prevents concurrent workers from claiming the same rows. A successful
-call writes `READY` vectors and a count-only audit; provider failure rolls back and returns a generic
-503. Operators repeat the call until `processed_chunk_count` is zero.
+call writes `READY` vectors and a count-only audit; provider failure rolls back and returns a generic 503. Operators repeat the call until `processed_chunk_count` is zero.
 
 ## Trust boundaries
 
@@ -283,5 +379,17 @@ call writes `READY` vectors and a count-only audit; provider failure rolls back 
 - Search does not downgrade to keyword-only behavior on provider failure; it returns a generic 503.
 - The authorized-search and embedding-reindex APIs are registered only for `development` and `test`
   environments.
-- The small curated evaluation is measured; no broad benchmark, reranker, answer generation, MCP,
-  or agent loop exists yet.
+- Conversation rows are tenant/user owned. The model never chooses conversation ownership or
+  authorization scope, and a foreign conversation is indistinguishable from a missing one.
+- Explicit recognizable cross-tenant/department requests abstain before retrieval/generation, while
+  Step 5 SQL authorization remains the authoritative row-level boundary for every query.
+- Retrieved document text is untrusted prompt data. Prompt instructions and no-tool provider
+  configuration reduce injection capability; host citation validation is the final output gate.
+- Gemini output never supplies trusted provenance. Only retrieved evidence IDs may be referenced,
+  and the host reconstructs exact citation fields from those authorized rows.
+- `messages` intentionally contain conversation questions/answers. Traces and logs are separate
+  metadata-only records and must never copy question, prompt, evidence, answer, key, provider body,
+  or hidden reasoning.
+- The small curated retrieval evaluation and one-case live Gemini smoke are not broad quality
+  benchmarks. No semantic entailment validator, numeric validator, message-history loading, MCP,
+  memory, calculation, planning, tool call, or agent loop exists yet.

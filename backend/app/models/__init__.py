@@ -1,5 +1,6 @@
 """SQLAlchemy domain models registered with Alembic metadata."""
 
+from app.models.chat import ChatRequestTrace, Conversation, Message
 from app.models.documents import (
     Document,
     DocumentAuditEvent,
@@ -26,6 +27,8 @@ from app.models.identity import (
 __all__ = [
     "Company",
     "CompanyGrant",
+    "ChatRequestTrace",
+    "Conversation",
     "Department",
     "DepartmentGrant",
     "Document",
@@ -34,6 +37,7 @@ __all__ = [
     "DocumentVersion",
     "IngestionJob",
     "Membership",
+    "Message",
     "ParsedCell",
     "ParsedPage",
     "ParsedRow",

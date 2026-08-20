@@ -33,13 +33,17 @@ def test_development_embedding_providers_are_rejected_in_production(provider: st
     with pytest.raises(ValidationError, match="unavailable in production"):
         _settings(app_env="production", embedding_provider=provider)
 
-    production = _settings(app_env="production", embedding_provider="disabled")
+    production = _settings(
+        app_env="production", embedding_provider="disabled", llm_provider="disabled"
+    )
 
     assert production.embedding_provider == "disabled"
 
 
 def test_production_application_excludes_all_development_embedding_routes() -> None:
-    application = create_app(_settings(app_env="production", embedding_provider="disabled"))
+    application = create_app(
+        _settings(app_env="production", embedding_provider="disabled", llm_provider="disabled")
+    )
 
     route_paths = set(application.openapi()["paths"])
 

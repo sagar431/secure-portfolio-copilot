@@ -4,6 +4,7 @@ import { ProtectedRoute } from './auth/ProtectedRoute'
 import { CapabilityRoute } from './auth/CapabilityRoute'
 import { ApplicationLayout } from './components/ApplicationLayout'
 import { AuthorizedSearchPage } from './pages/AuthorizedSearchPage'
+import { ChatPage } from './pages/ChatPage'
 import { DocumentIngestionPage } from './pages/DocumentIngestionPage'
 import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
@@ -16,6 +17,9 @@ export function App() {
       <Route element={<ProtectedRoute />}>
         <Route element={<ApplicationLayout />}>
           <Route index element={<HomePage />} />
+          <Route element={<CapabilityRoute capability="QUERY_DOCUMENTS" />}>
+            <Route path="chat" element={<ChatPage />} />
+          </Route>
           <Route element={<CapabilityRoute capability="MANAGE_UPLOADS" />}>
             <Route path="admin/documents" element={<DocumentIngestionPage />} />
           </Route>

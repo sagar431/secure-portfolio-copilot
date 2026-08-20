@@ -53,6 +53,7 @@ async def auth_harness(tmp_path: Path) -> AsyncIterator[AuthHarness]:
         demo_user_password=SecretStr(DEMO_PASSWORD),
         document_storage_path=tmp_path / "document-storage",
         embedding_provider="fake",
+        llm_provider="fake",
     )
     test_engine = create_async_engine(database_url)
     session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
