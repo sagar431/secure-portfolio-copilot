@@ -1,4 +1,4 @@
-# Step 3 Security Invariants
+# Step 4 Security Invariants
 
 These rules apply now and must remain true as later milestones are approved.
 
@@ -62,13 +62,48 @@ These rules apply now and must remain true as later milestones are approved.
     version endpoint and cannot change canonical scope metadata.
 27. **Safe deletion.** Soft deletion commits immediate unavailability before best-effort object
     cleanup. Cleanup failures are audited without restoring access or exposing storage details.
-28. **No future capabilities.** This milestone contains no document query/retrieval endpoint,
-    chunking, embedding, LLM, MCP, memory, calculation, arbitrary code execution, agent, or cloud
-    integration.
+28. **Approved versions only.** Chunk generation rejects any version that is not the non-deleted,
+    current approved version. Preview-ready, rejected, failed, old, and deleted versions cannot
+    become active search sources.
+29. **Copied chunk authority.** Every chunk copies tenant, company, department, visibility,
+    classification, document/version identity, version status, deletion state, and active status.
+    Chunk metadata cannot widen source-document authority.
+30. **Atomic replacement.** Approval locks the managed version and commits its lifecycle transition,
+    old-chunk deactivation, new-chunk insertion, and current-version pointer together. A chunking
+    failure rolls back the replacement and returns a generic `indexing_failed` error.
+31. **Immediate removal.** Replacement, rejection, and deletion deactivate affected chunks in the
+    same transaction as their authoritative lifecycle change. Search also rechecks authoritative
+    document/version rows, so copied flags alone are never sufficient.
+32. **Deterministic bounded chunks.** PDF chunks never cross pages and split only by deterministic
+    headings/size bounds. Spreadsheet chunks never cross sheets and preserve bounded row/cell ranges.
+    Empty, inactive, oversized, or inconsistent source input fails closed with a content-free error.
+33. **Mandatory repository scope.** Every public production search/count repository method requires
+    an immutable `AuthorizationScope`; no unscoped production retrieval method exists.
+34. **Authorization before materialization.** Tenant, company, department, exact
+    visibility/classification, capability, approval, deletion, active-version, current-version, and
+    active tenant/company filters are SQL predicates in the search statement before rank/limit rows
+    are returned.
+35. **Bounded deterministic search.** Queries normalize to 1–500 characters, `top_k` is 1–20,
+    excerpts are at most 500 characters, and total excerpt output is at most 10,000 characters.
+36. **No forged search scope.** The search body accepts only query and `top_k`. Tenant, company,
+    department, role, user, document, version, or scope fields fail validation; similarly named
+    headers/query parameters never alter database-derived authority.
+37. **No query authority for upload admins.** Nora receives a generic 403 before repository search.
+    `MANAGE_UPLOADS` still never implies `QUERY_DOCUMENTS`.
+38. **Metadata-only search audit.** Search logs/audits contain request/actor/resource IDs and counts,
+    never query text, raw candidates, excerpts, or document content. Forbidden candidates are absent
+    from responses, logs, traces, caches, and debug output.
+39. **Development-only inspector.** The backend search route is registered only in development/test.
+    Production frontend builds omit the search route, navigation, page, and endpoint client.
+40. **No Step 5 capabilities.** This step contains no embeddings, vector/hybrid retrieval, reranker,
+    LLM, MCP, memory, calculation, arbitrary code execution, agent, or cloud integration.
 
 Automated tests cover password/token primitives, exact seeded scopes, policy reason codes, generic
 login errors, forged fields, malformed/expired/wrong-issuer/wrong-audience/wrong-signature tokens,
 disabled users, revoked memberships, direct backend enforcement, safe logging, invalid request IDs,
 database-readiness failure, frontend session failure, upload authorization, strict metadata,
 malicious/malformed formats, parser/storage limits, state transitions, idempotency, versioning,
-preview provenance, inert formulas, deletion, and capability-gated frontend behavior.
+preview provenance, inert formulas, deletion, deterministic chunk provenance, metadata inheritance,
+approved-only creation, atomic replacement, rejection/deletion, mandatory repository scope,
+six-user isolation, forged search values, query/result/excerpt bounds, safe audit/logging, and
+capability-gated frontend behavior.

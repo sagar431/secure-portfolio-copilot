@@ -1,9 +1,10 @@
-# Step 3 Architecture
+# Step 4 Architecture
 
 ## Scope
 
-This document describes the Step 1 foundation, Step 2 identity/authorization, and Step 3 governed
-synthetic-document ingestion. Retrieval and all later capabilities remain absent.
+This document describes the Step 1 foundation, Step 2 identity/authorization, Step 3 governed
+synthetic-document ingestion, and Step 4 secure chunk storage and deterministic keyword retrieval.
+Embeddings and all later capabilities remain absent.
 
 ```mermaid
 flowchart LR
@@ -19,6 +20,12 @@ flowchart LR
     Validator --> Parser[Resource-limited parser worker]
     Parser --> ObjectStore[Generated-key local object storage]
     Parser --> Parsed[(Versioned parsed provenance)]
+    Ingestion -->|approve in one transaction| Chunker[Deterministic chunker]
+    Chunker --> Chunks[(ACL-copied document chunks)]
+    Browser -->|development search| SearchAPI[Authorized search API]
+    SearchAPI --> Scope
+    Scope --> Search[Scoped PostgreSQL full-text repository]
+    Search --> Chunks
     Identity --> SQLAlchemy[SQLAlchemy async engine]
     RequestID --> Route[Typed health/readiness route]
     Route -->|/ready only| SQLAlchemy
@@ -107,6 +114,12 @@ visibility/classification pair. Native XHR reports upload-byte progress; subsequ
 recursive, abortable, and non-overlapping. The page owns selection, preview, mutations, and refresh
 state while child upload, library, preview, badge, and deletion components remain controlled.
 
+In development builds, `/development/search` mounts only when a current grant contains
+`QUERY_DOCUMENTS`. It posts a normalized bounded query and `top_k` to the development-only backend
+endpoint. The page displays the active scope and renders only returned IDs, bounded excerpts,
+metadata, provenance, and scores. It performs no client-side authorization filtering. Production
+frontend builds omit the route, navigation, page, and API module.
+
 ## Document ingestion path
 
 1. The route validates strict JSON metadata inside multipart form data, validates the idempotency
@@ -121,12 +134,16 @@ state while child upload, library, preview, badge, and deletion components remai
    `formula_like` flag; it never executes formulas.
 5. The service writes parsed provenance and advances the version/job together to `PREVIEW_READY`.
    Version-addressed preview is then available; approval or rejection is legal only from that state.
+   Approval locks the version row, transitions it to `APPROVED`, deterministically chunks parsed
+   content, deactivates old-version chunks, installs new active chunks, updates the current-approved
+   pointer, writes metadata-only audit events, and commits once.
 6. Initial uploads deduplicate on checksum plus canonical scope metadata. A separate endpoint creates
    explicit versions. Actor/idempotency-key plus request fingerprint makes exact retries stable and
    conflicting reuse fail safely.
-7. Deletion marks the logical document and every version `DELETED`, clears the approved pointer,
-   commits immediate unavailability, and then performs best-effort object cleanup with audited
-   failures.
+7. Rejection creates no chunks and deactivates any matching rows defensively. Deletion marks the
+   logical document and every version `DELETED`, clears the approved pointer, deactivates every
+   chunk, commits immediate unavailability, and then performs best-effort object cleanup with
+   audited failures.
 
 ```mermaid
 stateDiagram-v2
@@ -154,8 +171,27 @@ The `db` Compose service exposes local PostgreSQL. Alembic reads the same enviro
 the application. Its initial reversible migration enables pgvector; SQLAlchemy metadata is empty.
 Step 2 adds tenants, companies, departments, roles, users, memberships, and three dimension-specific
 grant tables. Step 3 adds logical documents, versions, ingestion jobs, parsed pages, parsed sheets,
-rows, cells, and document audit events. The development seed writes only synthetic identity rows;
-documents are created through governed ingestion. `/ready` still executes only `SELECT 1`.
+rows, cells, and document audit events. Step 4 adds `document_chunks`, copied ACL/lifecycle columns,
+a generated `TSVECTOR`, an ACL/lifecycle B-tree index, and a GIN full-text index. The development
+seed writes only synthetic identity rows; documents and chunks are created through governed
+ingestion. `/ready` still executes only `SELECT 1`.
+
+## Authorized search path
+
+1. FastAPI authenticates the bearer subject and reloads the current database scope.
+2. The service denies users such as Nora who have no `QUERY_DOCUMENTS` capability; no repository
+   search runs on this path.
+3. Strict request validation accepts only `query` (1–500 normalized characters) and `top_k` (1–20).
+   Identity, tenant, company, department, role, document, version, and scope fields are forbidden.
+4. Every public production retrieval repository method requires `AuthorizationScope` as a mandatory
+   argument. Grant-correlated SQL predicates bind workspace, company, and allowed departments.
+5. The same SQL statement requires exact visibility/classification pairing, active tenant/company,
+   copied and authoritative approval/deletion state, active chunks, and the document's current
+   approved version before `plainto_tsquery('simple', query)`, rank, order, and limit are applied.
+6. The repository materializes at most 20 rows with a maximum 500-character excerpt. The service
+   returns chunk/document/version IDs, source metadata, page or sheet/row/cell provenance, and score.
+7. The audit event contains actor/request/resource IDs and counts only. Query and document content
+   are absent from audit metadata and logs.
 
 ## Trust boundaries
 
@@ -173,3 +209,7 @@ documents are created through governed ingestion. `/ready` still executes only `
 - Approval changes lifecycle state only. It does not grant `QUERY_DOCUMENTS` or invoke retrieval.
 - Parser output is untrusted display data and is rendered as React text, never HTML or executable
   spreadsheet content.
+- Chunks inherit authorization metadata; they cannot widen a document's visibility or classification.
+- Search authorization lives in SQL-backed repository code. UI route hiding is only a convenience.
+- Forbidden candidate text is never returned to the service, UI, audit event, or request log.
+- The authorized-search API is registered only for `development` and `test` environments.

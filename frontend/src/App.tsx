@@ -3,6 +3,7 @@ import { Route, Routes } from 'react-router-dom'
 import { ProtectedRoute } from './auth/ProtectedRoute'
 import { CapabilityRoute } from './auth/CapabilityRoute'
 import { ApplicationLayout } from './components/ApplicationLayout'
+import { AuthorizedSearchPage } from './pages/AuthorizedSearchPage'
 import { DocumentIngestionPage } from './pages/DocumentIngestionPage'
 import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
@@ -18,6 +19,14 @@ export function App() {
           <Route element={<CapabilityRoute capability="MANAGE_UPLOADS" />}>
             <Route path="admin/documents" element={<DocumentIngestionPage />} />
           </Route>
+          {import.meta.env.DEV ? (
+            <Route element={<CapabilityRoute capability="QUERY_DOCUMENTS" />}>
+              <Route
+                path="development/search"
+                element={<AuthorizedSearchPage />}
+              />
+            </Route>
+          ) : null}
           <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Route>

@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.chunking import ChunkingError, GeneratedChunk
 from app.core.errors import APIError
 from app.ingestion.audit import record_document_event
 from app.ingestion.contracts import (
@@ -57,6 +58,12 @@ from app.models.documents import (
 from app.models.identity import Capability, Company, Department, Tenant
 from app.policies.engine import authorize
 from app.policies.models import AuthorizationContext, PolicyRequest
+from app.retrieval.indexing import (
+    deactivate_document_chunks,
+    deactivate_version_chunks,
+    generate_approved_chunks,
+    replace_active_chunks,
+)
 from app.schemas.documents import (
     ClassificationPairData,
     CompanyOptionData,
@@ -952,7 +959,10 @@ class DocumentIngestionService:
         request_id: str,
     ) -> DocumentPreviewData:
         found = await get_version_for_management(
-            self.session, context.scope, document_id, version_id
+            self.session,
+            context.scope,
+            document_id,
+            version_id,
         )
         if found is None:
             await self._raise_not_found(
@@ -1065,7 +1075,11 @@ class DocumentIngestionService:
         request_id: str,
     ) -> VersionActionData:
         found = await get_version_for_management(
-            self.session, context.scope, document_id, version_id
+            self.session,
+            context.scope,
+            document_id,
+            version_id,
+            for_update=True,
         )
         if found is None:
             await self._raise_not_found(
@@ -1106,13 +1120,89 @@ class DocumentIngestionService:
                 "Document is not in a state that permits this action.",
             ) from None
         actor_id = context.identity.user_id
+        generated_chunks: tuple[GeneratedChunk, ...] = ()
         if target == IngestionStatus.APPROVED:
             version.approved_by_user_id = actor_id
             version.approved_at = _now()
             document.current_approved_version_id = version.id
+            try:
+                generated_chunks = generate_approved_chunks(document, version)
+            except (ChunkingError, ValueError) as error:
+                reason_code = (
+                    error.code.value if isinstance(error, ChunkingError) else "INVALID_SOURCE"
+                )
+                tenant_id = document.tenant_id
+                company_id = document.company_id
+                failed_document_id = document.id
+                failed_version_id = version.id
+                failed_job_id = version.ingestion_job.id
+                await self.session.rollback()
+                await record_document_event(
+                    self.session,
+                    event_type="document_chunk_index",
+                    outcome="error",
+                    reason_code=reason_code,
+                    request_id=request_id,
+                    actor_user_id=actor_id,
+                    tenant_id=tenant_id,
+                    company_id=company_id,
+                    document_id=failed_document_id,
+                    document_version_id=failed_version_id,
+                    ingestion_job_id=failed_job_id,
+                )
+                await self.session.commit()
+                raise APIError(
+                    422,
+                    "indexing_failed",
+                    "Document indexing failed safely.",
+                ) from None
+            deactivated = await replace_active_chunks(
+                self.session,
+                document,
+                version,
+                generated_chunks,
+            )
         else:
             version.rejected_by_user_id = actor_id
             version.rejected_at = _now()
+            deactivated = await deactivate_version_chunks(
+                self.session,
+                version.id,
+                version_status=IngestionStatus.REJECTED,
+            )
+        if target == IngestionStatus.APPROVED:
+            await record_document_event(
+                self.session,
+                event_type="document_chunk_index",
+                outcome="allow",
+                reason_code="APPROVED_VERSION_INDEXED",
+                request_id=request_id,
+                actor_user_id=actor_id,
+                tenant_id=document.tenant_id,
+                company_id=document.company_id,
+                document_id=document.id,
+                document_version_id=version.id,
+                ingestion_job_id=version.ingestion_job.id,
+                metadata={
+                    "chunk_count": len(generated_chunks),
+                    "deactivated_chunk_count": deactivated,
+                },
+            )
+        else:
+            await record_document_event(
+                self.session,
+                event_type="document_chunk_deactivate",
+                outcome="allow",
+                reason_code="REJECTED_VERSION_DEACTIVATED",
+                request_id=request_id,
+                actor_user_id=actor_id,
+                tenant_id=document.tenant_id,
+                company_id=document.company_id,
+                document_id=document.id,
+                document_version_id=version.id,
+                ingestion_job_id=version.ingestion_job.id,
+                metadata={"chunk_count": deactivated},
+            )
         await record_document_event(
             self.session,
             event_type=f"document_{target.value.lower()}",
@@ -1165,6 +1255,7 @@ class DocumentIngestionService:
             version.deleted_at = deleted_at
         document.deleted_at = deleted_at
         document.current_approved_version_id = None
+        deactivated = await deactivate_document_chunks(self.session, document.id)
         await record_document_event(
             self.session,
             event_type="document_delete",
@@ -1175,7 +1266,10 @@ class DocumentIngestionService:
             tenant_id=document.tenant_id,
             company_id=document.company_id,
             document_id=document.id,
-            metadata={"version_count": len(document.versions)},
+            metadata={
+                "version_count": len(document.versions),
+                "chunk_count": deactivated,
+            },
         )
         await self.session.commit()
         for key in keys:

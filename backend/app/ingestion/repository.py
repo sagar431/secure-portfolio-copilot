@@ -152,8 +152,10 @@ async def get_version_for_management(
     scope: AuthorizationScope,
     document_id: UUID,
     version_id: UUID,
+    *,
+    for_update: bool = False,
 ) -> tuple[Document, DocumentVersion] | None:
-    document = await get_document_for_management(session, scope, document_id)
+    document = await get_document_for_management(session, scope, document_id, for_update=for_update)
     if document is None:
         return None
     version = next((item for item in document.versions if item.id == version_id), None)

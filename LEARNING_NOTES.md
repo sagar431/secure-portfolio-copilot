@@ -216,3 +216,85 @@ Alice's freshly loaded database grants before the route reads the file.
 8. Why can Nora approve a document but still not query it?
 9. Which data is retained for a failed validation attempt, and which data is deliberately absent?
 10. What remains for Step 4, and why is none of it implemented here?
+
+## Step 4 — Secure chunks and deterministic keyword search
+
+### What problem this step solves
+
+It makes approved synthetic documents searchable without weakening the authorization boundary.
+Parsed content is converted into bounded evidence units whose source location and effective ACL stay
+attached, then PostgreSQL ranks only candidates that match the authenticated user's current scope
+and the authoritative document lifecycle.
+
+### Frontend flow
+
+In a development build, `ApplicationLayout` shows **Authorized search** only when the current
+database-derived grants include `QUERY_DOCUMENTS`. `CapabilityRoute` prevents Nora from mounting the
+page; direct navigation returns home without a search request. The form sends only a normalized
+query and bounded `top_k`. It shows loading, indexing/count, empty, and safe error states, then
+renders the backend result list as inert React text with IDs, copied metadata, provenance, and score.
+The browser does not receive or filter forbidden candidates. Production builds omit the feature.
+
+### Backend flow
+
+Approval locks the managed version, performs the legal `PREVIEW_READY -> APPROVED` transition, sets
+the current-approved pointer, constructs a typed parsed-document snapshot, and calls the pure
+deterministic chunker. The index adapter validates that every generated chunk matches the document,
+version, ACL, approval, deletion, and active state. It deactivates old chunks, inserts new chunks,
+writes metadata-only audit events, and commits once. A failure rolls back the transition/replacement
+and returns a generic indexing error.
+
+For search, FastAPI validates a strict `{query, top_k}` body after authentication. The service denies
+users without query capability before repository access. The repository requires
+`AuthorizationScope`, builds grant-correlated predicates, applies ACL/lifecycle/current-version
+filters, then applies PostgreSQL `plainto_tsquery`, rank, deterministic ID tie-break, and limit. The
+service maps permitted rows to bounded DTOs and audits only IDs and counts.
+
+### Database flow
+
+Migration `20260821_0004` creates `document_chunks`. Each row has document/version/tenant/company/
+department IDs, copied department/visibility/classification/version/lifecycle fields, deterministic
+ordinal and content hash, content, and either PDF page provenance or spreadsheet sheet/row/cell
+provenance. PostgreSQL maintains a generated `TSVECTOR`; a GIN index supports keyword matching and a
+compound index supports ACL/lifecycle filtering. Authoritative `documents` and `document_versions`
+are joined and rechecked for every search.
+
+### Heuristic versus LLM ownership
+
+All Step 4 behavior is deterministic. Heading detection, row grouping, bounds, hashes, scope
+construction, SQL filters, ranking, excerpts, lifecycle changes, audits, and UI states use typed
+Python/TypeScript and PostgreSQL. No LLM chooses chunks, changes authority, rewrites queries, ranks
+results, or generates an answer.
+
+### MCP tools involved
+
+None. Search is a direct development baseline used to prove storage and authorization before the
+later MCP/agent steps.
+
+### Security invariant
+
+Content can leave the retrieval repository only when its copied ACL and authoritative source rows
+both match a mandatory database-derived `AuthorizationScope`, the version is approved/current, and
+the chunk is active/non-deleted. Forbidden candidates never enter responses, audits, request logs,
+traces, caches, or frontend state.
+
+### Failure example
+
+Alice may add Atlas tenant/company IDs, Legal department, Admin role, Nora's user ID, and arbitrary
+document/version IDs to the body. Strict validation rejects the body. The same values in headers or
+query parameters are ignored, and the SQL statement still uses Alice's reloaded Orion Finance +
+Shared grants. Searching for a Legal term returns no forbidden result. Nora receives a generic 403
+before the repository is called.
+
+### Questions Sagar should be able to answer
+
+1. Why must every retrieval repository method accept `AuthorizationScope`?
+2. Which copied fields exist on a chunk, and why are authoritative rows still joined during search?
+3. How does approval replace old-version chunks atomically?
+4. Why can rejected, deleted, inactive, or old-version chunks not appear?
+5. How are PDF and spreadsheet chunk boundaries different?
+6. Which provenance fields identify a PDF result versus a spreadsheet result?
+7. Where are query, `top_k`, excerpt, and total-result bounds enforced?
+8. Why does Nora receive 403 even though she can approve uploads?
+9. Which search metadata is audited, and which text is deliberately excluded?
+10. Why is this keyword baseline deterministic retrieval rather than Step 5 hybrid RAG?

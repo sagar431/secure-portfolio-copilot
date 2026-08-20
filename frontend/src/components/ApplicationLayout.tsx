@@ -9,6 +9,10 @@ export function ApplicationLayout() {
     auth.currentUser?.authorization_scope.grants ?? [],
     'MANAGE_UPLOADS',
   )
+  const canQueryDocuments = hasCapability(
+    auth.currentUser?.authorization_scope.grants ?? [],
+    'QUERY_DOCUMENTS',
+  )
   return (
     <div className="app-shell">
       <header className="site-header">
@@ -19,6 +23,9 @@ export function ApplicationLayout() {
           <Link to="/">Scope</Link>
           {canManageUploads ? (
             <Link to="/admin/documents">Document ingestion</Link>
+          ) : null}
+          {import.meta.env.DEV && canQueryDocuments ? (
+            <Link to="/development/search">Authorized search</Link>
           ) : null}
         </nav>
         <div className="header-session">
@@ -32,7 +39,7 @@ export function ApplicationLayout() {
         <Outlet />
       </main>
       <footer className="site-footer">
-        Synthetic-data development environment · Governed ingestion Step 3
+        Synthetic-data development environment · Secure retrieval Step 4
       </footer>
     </div>
   )

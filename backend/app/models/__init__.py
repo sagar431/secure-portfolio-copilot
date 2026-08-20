@@ -3,6 +3,7 @@
 from app.models.documents import (
     Document,
     DocumentAuditEvent,
+    DocumentChunk,
     DocumentVersion,
     IngestionJob,
     ParsedCell,
@@ -29,6 +30,7 @@ __all__ = [
     "DepartmentGrant",
     "Document",
     "DocumentAuditEvent",
+    "DocumentChunk",
     "DocumentVersion",
     "IngestionJob",
     "Membership",

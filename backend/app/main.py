@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.auth import router as auth_router
+from app.api.routes.development import router as development_router
 from app.api.routes.documents import router as documents_router
 from app.api.routes.system import router as system_router
 from app.core.config import Settings, get_settings
@@ -41,6 +42,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(system_router)
     application.include_router(auth_router)
     application.include_router(documents_router)
+    if active_settings.app_env in {"development", "test"}:
+        application.include_router(development_router)
     return application
 
 

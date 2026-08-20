@@ -10,14 +10,17 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Computed,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -166,6 +169,11 @@ class DocumentVersion(TimestampMixin, Base):
         cascade="all, delete-orphan",
         order_by="ParsedSheet.sheet_index",
     )
+    chunks: Mapped[list[DocumentChunk]] = relationship(
+        back_populates="document_version",
+        cascade="all, delete-orphan",
+        order_by="DocumentChunk.ordinal",
+    )
 
 
 class IngestionJob(TimestampMixin, Base):
@@ -271,6 +279,117 @@ class ParsedCell(TimestampMixin, Base):
     formula_like: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     row: Mapped[ParsedRow] = relationship(back_populates="cells")
+
+
+class DocumentChunk(TimestampMixin, Base):
+    """Searchable content with copied ACL, lifecycle, and source metadata."""
+
+    __tablename__ = "document_chunks"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_version_id", "ordinal", name="uq_document_chunks_version_ordinal"
+        ),
+        CheckConstraint("ordinal >= 0", name="ck_document_chunks_ordinal_nonnegative"),
+        CheckConstraint("version_number > 0", name="ck_document_chunks_version_number_positive"),
+        CheckConstraint(
+            "source_type IN ('pdf', 'xlsx', 'csv')", name="ck_document_chunks_source_type"
+        ),
+        CheckConstraint(
+            "version_status IN ('APPROVED', 'REJECTED', 'DELETED')",
+            name="ck_document_chunks_version_status",
+        ),
+        CheckConstraint(
+            "NOT active OR (version_status = 'APPROVED' "
+            "AND NOT document_deleted AND NOT version_deleted)",
+            name="ck_document_chunks_active_lifecycle",
+        ),
+        CheckConstraint(
+            "(department = 'finance' AND visibility = 'DEPARTMENT_PRIVATE' "
+            "AND classification = 'FINANCE_ONLY') OR "
+            "(department = 'legal' AND visibility = 'DEPARTMENT_PRIVATE' "
+            "AND classification = 'LEGAL_ONLY_CONFIDENTIAL') OR "
+            "(department = 'shared' AND visibility = 'TENANT_SHARED' "
+            "AND classification = 'TENANT_SHARED')",
+            name="ck_document_chunks_acl_metadata",
+        ),
+        CheckConstraint(
+            "char_length(content) BETWEEN 1 AND 2000",
+            name="ck_document_chunks_content_length",
+        ),
+        CheckConstraint(
+            "char_length(content_hash) = 64",
+            name="ck_document_chunks_content_hash_length",
+        ),
+        CheckConstraint(
+            "(source_type = 'pdf' AND page_number IS NOT NULL "
+            "AND sheet_name IS NULL AND row_start IS NULL AND row_end IS NULL "
+            "AND cell_start IS NULL AND cell_end IS NULL) OR "
+            "(source_type IN ('xlsx', 'csv') AND page_number IS NULL "
+            "AND sheet_name IS NOT NULL AND row_start IS NOT NULL AND row_end IS NOT NULL "
+            "AND cell_start IS NOT NULL AND cell_end IS NOT NULL)",
+            name="ck_document_chunks_provenance",
+        ),
+        CheckConstraint(
+            "(page_number IS NULL OR page_number > 0) AND "
+            "(row_start IS NULL OR row_start > 0) AND "
+            "(row_end IS NULL OR row_end >= row_start)",
+            name="ck_document_chunks_location_ranges",
+        ),
+        Index(
+            "ix_document_chunks_acl_lifecycle",
+            "tenant_id",
+            "company_id",
+            "department",
+            "visibility",
+            "active",
+            "version_status",
+        ),
+        Index("ix_document_chunks_search_vector", "search_vector", postgresql_using="gin"),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    document_id: Mapped[UUID] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_version_id: Mapped[UUID] = mapped_column(
+        ForeignKey("document_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
+    company_id: Mapped[UUID] = mapped_column(ForeignKey("companies.id"), nullable=False, index=True)
+    department_id: Mapped[UUID] = mapped_column(
+        ForeignKey("departments.id"), nullable=False, index=True
+    )
+    department: Mapped[str] = mapped_column(String(64), nullable=False)
+    visibility: Mapped[str] = mapped_column(String(32), nullable=False)
+    classification: Mapped[str] = mapped_column(String(32), nullable=False)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    version_status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    document_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    version_deleted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    page_number: Mapped[int | None] = mapped_column(Integer)
+    sheet_name: Mapped[str | None] = mapped_column(String(128))
+    row_start: Mapped[int | None] = mapped_column(Integer)
+    row_end: Mapped[int | None] = mapped_column(Integer)
+    cell_start: Mapped[str | None] = mapped_column(String(24))
+    cell_end: Mapped[str | None] = mapped_column(String(24))
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    search_vector: Mapped[object] = mapped_column(
+        TSVECTOR,
+        Computed("to_tsvector('simple', coalesce(content, ''))", persisted=True),
+        nullable=False,
+    )
+
+    document: Mapped[Document] = relationship(foreign_keys=[document_id])
+    document_version: Mapped[DocumentVersion] = relationship(
+        back_populates="chunks", foreign_keys=[document_version_id]
+    )
+    tenant: Mapped[Tenant] = relationship(foreign_keys=[tenant_id])
+    company: Mapped[Company] = relationship(foreign_keys=[company_id])
+    source_department: Mapped[Department] = relationship(foreign_keys=[department_id])
 
 
 class DocumentAuditEvent(Base):

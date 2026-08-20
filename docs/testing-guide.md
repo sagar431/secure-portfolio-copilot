@@ -1,4 +1,4 @@
-# Step 3 Testing Guide
+# Step 4 Testing Guide
 
 Run commands from the locations shown. Tests use only synthetic identities and an isolated tmpfs
 PostgreSQL test service.
@@ -20,11 +20,13 @@ TEST_DATABASE_URL=postgresql+asyncpg://portfolio:portfolio_test@127.0.0.1:5433/p
   uv run pytest
 ```
 
-The suite includes all Step 1/2 regressions plus document state-machine units, real PDF/XLSX/CSV
+The 132-test suite includes all Step 1–3 regressions plus document state-machine units, real PDF/XLSX/CSV
 parsing, malicious container/signature/MIME cases, storage confinement and permissions, formula
 inertness, PostgreSQL-backed upload/preview/approval/rejection/version/deletion flows, safe audit
-records, idempotency, and direct backend authorization. PostgreSQL-backed tests refuse any database
-not named `portfolio_test`.
+records, idempotency, deterministic PDF/spreadsheet chunking, PostgreSQL full-text search, mandatory
+repository scope, six-user tenant/department isolation, forged-scope denial, replacement/deletion,
+query/result/excerpt limits, and log/audit redaction. PostgreSQL-backed tests refuse any database not
+named `portfolio_test`.
 
 ## Frontend quality checks
 
@@ -41,8 +43,9 @@ npm run build
 Vitest uses jsdom and React Testing Library. `fetch` and XHR are replaced with deterministic success,
 progress, poll, error, and cancellation behavior; no backend process is required for these tests.
 Coverage includes capability gating, trusted option cascades, multipart metadata, safe request-ID
-errors, previews with coordinates, inert unsafe strings, decisions, filtering/version upload, and
-deletion confirmation.
+errors, previews with coordinates, inert unsafe strings, decisions, filtering/version upload,
+deletion confirmation, development-only search routing, Nora denial, strict search response parsing,
+bounded inputs, safe errors, index status, and ID/metadata/provenance/score rendering.
 
 ## Compose and database checks
 
@@ -63,7 +66,7 @@ uv run alembic check
 DEMO_USER_PASSWORD='<choose a local 12+ character password>' \
   uv run python -m app.scripts.seed_development
 DEMO_USER_PASSWORD='<same password>' uv run python -m app.scripts.seed_development
-uv run alembic downgrade 20260820_0002
+uv run alembic downgrade 20260821_0003
 uv run alembic upgrade head
 DEMO_USER_PASSWORD='<same password>' uv run python -m app.scripts.seed_development
 ```
@@ -76,6 +79,8 @@ docker compose exec -T db psql -U portfolio -d portfolio \
   -c "SELECT extname, extversion FROM pg_extension WHERE extname = 'vector';"
 docker compose exec -T db psql -U portfolio -d portfolio \
   -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND (tablename LIKE 'document%' OR tablename LIKE 'parsed_%') ORDER BY tablename;"
+docker compose exec -T db psql -U portfolio -d portfolio \
+  -c "SELECT indexname FROM pg_indexes WHERE tablename = 'document_chunks' ORDER BY indexname;"
 ```
 
 ## Live smoke test
@@ -116,6 +121,30 @@ As Nora, open `/admin/documents` and perform the Step 3 acceptance flow:
    admin API request, and direct backend calls return a safe denial.
 6. Cancel a deletion and confirm no API mutation occurs. Then confirm deletion and verify the
    document disappears immediately and its former preview is HTTP 404.
+
+After approving one PDF and one XLSX, open `/development/search` as each demo user and search a term
+present in that user's Finance, Legal, or Shared sources. Record returned document/chunk IDs:
+
+- Alice: Orion Finance + Shared only.
+- Leo: Orion Legal + Shared only.
+- Maya: Orion Finance + Legal + Shared only.
+- Amir: Atlas Finance + Shared only.
+- Lina: Atlas Legal + Shared only.
+- Nora: no search navigation; direct UI navigation returns home and direct API access is HTTP 403.
+
+Confirm every result shows version/chunk/document IDs, score, copied ACL metadata, and either PDF page
+or spreadsheet sheet/row/cell provenance. Approve a new version and confirm only its chunks remain
+active. Delete it and confirm search returns no chunks from that document immediately. The browser
+must never display a candidate outside the server-returned result list.
+
+API form for a deterministic smoke search:
+
+```bash
+curl --fail-with-body -X POST http://127.0.0.1:8000/api/development/authorized-search \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"synthetic","top_k":20}'
+```
 
 Use an API client to add forged tenant, user, role, department, and company fields to login. The body
 must fail with safe `validation_error`. Add the same values as `/api/auth/me` query parameters or
