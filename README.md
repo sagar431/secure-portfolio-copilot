@@ -1,10 +1,10 @@
 # Secure Portfolio Copilot
 
-A security-first portfolio analysis copilot, currently complete through Playbook Step 2: identity,
-tenancy, departments, and deterministic authorization. It provides development-only password login,
-short-lived JWTs, database-revalidated memberships, strict authorization scopes, reason-coded
-RBAC/ABAC policy, and a protected React scope view. It intentionally contains no document
-processing, retrieval, model, MCP, memory, calculation, agent, or cloud features.
+A security-first portfolio analysis copilot, currently complete through Playbook Step 3: governed
+synthetic-document ingestion. In addition to database-revalidated identity and deterministic
+authorization, an authorized upload administrator can validate, parse, preview, version, approve,
+reject, list, and delete PDF, XLSX, and CSV documents. It intentionally contains no retrieval,
+chunking, embedding, model, MCP, memory, calculation, agent, or cloud features.
 
 ## Prerequisites
 
@@ -62,8 +62,13 @@ npm run dev
 Open <http://127.0.0.1:3000>. Anonymous users are redirected to login. Development-only cards fill
 the email for one of the six synthetic users; enter the local password selected before seeding. The
 protected home page displays the current database-derived tenant, role, department, companies,
-query departments, and capabilities. API documentation is available at
-<http://127.0.0.1:8000/docs> in development.
+query departments, and capabilities. Nora also sees **Document ingestion**, where trusted backend
+options constrain tenant, company, department, visibility, classification, and document type. API
+documentation is available at <http://127.0.0.1:8000/docs> in development.
+
+Uploaded bytes are stored under `DOCUMENT_STORAGE_PATH` using generated object keys. Never point
+that setting at a repository or shared-data directory. The default `.local/document-storage` path
+is ignored by Git.
 
 ## Demo identities
 
@@ -127,7 +132,7 @@ docker compose exec -T db pg_isready -U portfolio -d portfolio
 cd backend
 uv run alembic upgrade head
 uv run alembic check
-uv run alembic downgrade 20260820_0001
+uv run alembic downgrade 20260820_0002
 uv run alembic upgrade head
 uv run python -m app.scripts.seed_development
 
@@ -164,6 +169,21 @@ LEARNING_NOTES.md        End-to-end learning notes
 - [Implementation status](IMPLEMENTATION_STATUS.md)
 - [Learning notes](LEARNING_NOTES.md)
 
+## Step 3 document workflow
+
+The canonical management page is `/admin/documents`. Backend routes under `/api/admin` provide
+trusted form options, upload and explicit new-version operations, ingestion status, version-addressed
+preview/approve/reject actions, a scoped management library, and soft deletion. Every route requires
+a current database-derived `MANAGE_UPLOADS` grant for the target workspace and company. The UI gate
+is only a convenience and never replaces backend authorization.
+
+Files are limited to 10 MiB and are checked by extension, declared MIME type, signature, container
+structure, decompression limits, and format-specific safety rules before parsing. PDF previews retain
+page numbers; spreadsheet previews retain sheet, row, cell coordinate, value kind, and formula-like
+provenance. Formula-like values are rendered as inert text. Approval is legal only from
+`PREVIEW_READY`; deletion immediately removes the document from management reads and removes stored
+objects while retaining soft-delete metadata for a later retention process.
+
 ## Security boundary for this milestone
 
 Only synthetic data belongs in this repository. The API does not log request bodies. Unexpected
@@ -173,5 +193,6 @@ grants. The browser cannot supply effective identity or scope. Passwords use Arg
 errors are generic, and request/audit logs exclude passwords, tokens, request bodies, and query
 strings.
 
-Document upload, parsing, retrieval, embeddings, LLM calls, MCP, memory, calculations, agent code,
-and AWS require separately approved later steps.
+Upload and parsing are local, bounded, deterministic Step 3 capabilities. Approved documents are not
+queryable yet. Retrieval, chunking, embeddings, LLM calls, MCP, memory, calculations, agent code,
+hard-delete retention jobs, and AWS require separately approved later steps.

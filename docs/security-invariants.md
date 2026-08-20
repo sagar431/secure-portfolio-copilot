@@ -1,4 +1,4 @@
-# Step 2 Security Invariants
+# Step 3 Security Invariants
 
 These rules apply now and must remain true as later milestones are approved.
 
@@ -35,12 +35,40 @@ These rules apply now and must remain true as later milestones are approved.
 16. **Development-only credentials.** The seed refuses production mode and placeholder/short demo
     passwords. Demo cards are excluded from production frontend builds. Production rejects the
     default development JWT key and password login.
-17. **No future capabilities.** This milestone contains no upload endpoint, retrieval, embedding, LLM, MCP,
-   memory, calculation, arbitrary code execution, or cloud integration.
+17. **Capability and target authorization.** Every document-management operation requires a current
+   database-derived `MANAGE_UPLOADS` grant for the exact workspace/company. Route hiding is not an
+   authorization boundary, and upload targets are checked before file bytes are read.
 18. **Development database only.** Compose defaults are local credentials and must not be reused in
     shared or production environments.
+19. **Canonical metadata only.** Tenant/company IDs, department, visibility, classification,
+    document type, and reporting period must match backend-published and backend-validated values.
+    Identity, role, filesystem path, URL, and version number are never accepted from the browser.
+20. **Bounded uploads.** Files are capped at 10 MiB and validated by sanitized extension, MIME type,
+    signature, archive structure, decompressed size, entry count, and parser-specific limits.
+21. **Fail-closed formats.** Encrypted or active PDFs, macros, external links, unsafe OOXML members,
+    ZIP bombs, malformed containers, and unsupported content are rejected before preview.
+22. **Parser isolation.** Parsing occurs in a spawned process with a wall-clock timeout and operating
+    system resource limits. Parser errors expose only stable safe codes/messages.
+23. **Generated object identity.** Raw files use UUID-only server-generated keys confined beneath a
+    configured storage root. Browser filenames never choose a path. Writes are private and atomic;
+    checksums and sizes are verified.
+24. **Inert preview.** Parsed spreadsheet values and PDF text are display data only. Formula-like
+    strings are preserved for provenance but never executed or injected as HTML.
+25. **Legal lifecycle only.** Version/job state changes follow the explicit Step 3 state machine.
+    Approval and rejection are allowed only from `PREVIEW_READY`; rejected/failed/deleted versions
+    cannot later be approved.
+26. **Deterministic retries and versions.** Actor-scoped idempotency keys and request fingerprints
+    prevent accidental duplicate writes. Conflicting reuse fails. New versions require the explicit
+    version endpoint and cannot change canonical scope metadata.
+27. **Safe deletion.** Soft deletion commits immediate unavailability before best-effort object
+    cleanup. Cleanup failures are audited without restoring access or exposing storage details.
+28. **No future capabilities.** This milestone contains no document query/retrieval endpoint,
+    chunking, embedding, LLM, MCP, memory, calculation, arbitrary code execution, agent, or cloud
+    integration.
 
 Automated tests cover password/token primitives, exact seeded scopes, policy reason codes, generic
 login errors, forged fields, malformed/expired/wrong-issuer/wrong-audience/wrong-signature tokens,
 disabled users, revoked memberships, direct backend enforcement, safe logging, invalid request IDs,
-database-readiness failure, and frontend session failure.
+database-readiness failure, frontend session failure, upload authorization, strict metadata,
+malicious/malformed formats, parser/storage limits, state transitions, idempotency, versioning,
+preview provenance, inert formulas, deletion, and capability-gated frontend behavior.

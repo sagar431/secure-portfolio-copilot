@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.auth import router as auth_router
+from app.api.routes.documents import router as documents_router
 from app.api.routes.system import router as system_router
 from app.core.config import Settings, get_settings
 from app.core.errors import register_exception_handlers
@@ -32,13 +33,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=active_settings.cors_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
-        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        allow_methods=["DELETE", "GET", "POST"],
+        allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"],
     )
     application.add_middleware(RequestIDMiddleware)
     register_exception_handlers(application)
     application.include_router(system_router)
     application.include_router(auth_router)
+    application.include_router(documents_router)
     return application
 
 

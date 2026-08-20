@@ -93,7 +93,11 @@ describe('App', () => {
       </MemoryRouter>,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Log out' }))
+    const logoutButton = await screen.findByRole('button', { name: 'Log out' })
+    expect(
+      screen.queryByRole('link', { name: 'Document ingestion' }),
+    ).not.toBeInTheDocument()
+    fireEvent.click(logoutButton)
 
     expect(
       await screen.findByRole('heading', {

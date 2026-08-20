@@ -1,9 +1,9 @@
-# Step 2 Architecture
+# Step 3 Architecture
 
 ## Scope
 
-This document describes the Step 1 foundation plus Playbook Step 2 identity and deterministic
-authorization. Document ingestion and all later capabilities remain absent.
+This document describes the Step 1 foundation, Step 2 identity/authorization, and Step 3 governed
+synthetic-document ingestion. Retrieval and all later capabilities remain absent.
 
 ```mermaid
 flowchart LR
@@ -14,6 +14,11 @@ flowchart LR
     JWT --> Identity[Reload user memberships and grants]
     Identity --> Scope[Frozen AuthorizationScope]
     Scope --> Policy[Deterministic RBAC plus ABAC]
+    Policy --> Ingestion[Governed document service]
+    Ingestion --> Validator[Bounded format validation]
+    Validator --> Parser[Resource-limited parser worker]
+    Parser --> ObjectStore[Generated-key local object storage]
+    Parser --> Parsed[(Versioned parsed provenance)]
     Identity --> SQLAlchemy[SQLAlchemy async engine]
     RequestID --> Route[Typed health/readiness route]
     Route -->|/ready only| SQLAlchemy
@@ -95,13 +100,62 @@ health request through `getJson`. The client validates the envelope's basic shap
 network, and invalid-response failures into a typed `ApiError`. `BackendHealth` renders a distinct
 loading, online, or offline state.
 
+The nested `/admin/documents` route mounts only when a current grant contains `MANAGE_UPLOADS`.
+After mounting it loads a dedicated backend-derived options contract and the scoped management
+library. The form cascades tenant to company and department to the allowed
+visibility/classification pair. Native XHR reports upload-byte progress; subsequent job polling is
+recursive, abortable, and non-overlapping. The page owns selection, preview, mutations, and refresh
+state while child upload, library, preview, badge, and deletion components remain controlled.
+
+## Document ingestion path
+
+1. The route validates strict JSON metadata inside multipart form data, validates the idempotency
+   header, and authorizes the target workspace/company before reading the file body.
+2. Validation bounds bytes and checks the sanitized filename, extension, declared MIME, signature,
+   PDF safety, CSV structure, and OOXML container contents. Invalid attempts persist only safe
+   metadata and a stable failure code.
+3. Accepted bytes receive a generated UUID-only storage key. The local adapter confines writes to
+   its root, uses private permissions and an atomic promotion, and verifies size/checksum.
+4. A spawned worker applies wall-clock and process resource limits. PDF output contains numbered
+   pages. XLSX/CSV output contains sheets, numbered rows, coordinates, value kinds, and a
+   `formula_like` flag; it never executes formulas.
+5. The service writes parsed provenance and advances the version/job together to `PREVIEW_READY`.
+   Version-addressed preview is then available; approval or rejection is legal only from that state.
+6. Initial uploads deduplicate on checksum plus canonical scope metadata. A separate endpoint creates
+   explicit versions. Actor/idempotency-key plus request fingerprint makes exact retries stable and
+   conflicting reuse fail safely.
+7. Deletion marks the logical document and every version `DELETED`, clears the approved pointer,
+   commits immediate unavailability, and then performs best-effort object cleanup with audited
+   failures.
+
+```mermaid
+stateDiagram-v2
+    [*] --> UPLOADED
+    UPLOADED --> VALIDATING
+    VALIDATING --> PARSING
+    VALIDATING --> VALIDATION_FAILED
+    PARSING --> PREVIEW_READY
+    PARSING --> PARSING_FAILED
+    PREVIEW_READY --> APPROVED
+    PREVIEW_READY --> REJECTED
+    UPLOADED --> DELETED
+    VALIDATING --> DELETED
+    PARSING --> DELETED
+    PREVIEW_READY --> DELETED
+    APPROVED --> DELETED
+    REJECTED --> DELETED
+    VALIDATION_FAILED --> DELETED
+    PARSING_FAILED --> DELETED
+```
+
 ## Database flow
 
 The `db` Compose service exposes local PostgreSQL. Alembic reads the same environment-backed URL as
 the application. Its initial reversible migration enables pgvector; SQLAlchemy metadata is empty.
 Step 2 adds tenants, companies, departments, roles, users, memberships, and three dimension-specific
-grant tables. The development seed writes only synthetic rows with deterministic IDs. `/ready`
-still executes only `SELECT 1`.
+grant tables. Step 3 adds logical documents, versions, ingestion jobs, parsed pages, parsed sheets,
+rows, cells, and document audit events. The development seed writes only synthetic identity rows;
+documents are created through governed ingestion. `/ready` still executes only `SELECT 1`.
 
 ## Trust boundaries
 
@@ -114,3 +168,8 @@ still executes only `SELECT 1`.
   arrays.
 - A role alone never grants query access. Nora's Admin role has no query department grant.
 - Uvicorn's query-string access log is disabled; the application emits metadata-only request logs.
+- Uploaded filenames and file contents never become storage paths, authority inputs, audit metadata,
+  or log fields. Generated storage keys are server-owned.
+- Approval changes lifecycle state only. It does not grant `QUERY_DOCUMENTS` or invoke retrieval.
+- Parser output is untrusted display data and is rendered as React text, never HTML or executable
+  spreadsheet content.

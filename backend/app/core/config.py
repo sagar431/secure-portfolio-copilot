@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr, model_validator
@@ -26,6 +27,7 @@ class Settings(BaseSettings):
     jwt_audience: str = "secure-portfolio-web"
     jwt_access_token_minutes: int = Field(default=15, ge=1, le=60)
     demo_user_password: SecretStr | None = None
+    document_storage_path: Path = Path("../.local/document-storage")
     cors_origins: list[str] = [
         "http://127.0.0.1:3000",
         "http://localhost:3000",

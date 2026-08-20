@@ -7,6 +7,7 @@ export type AuthStatus = 'loading' | 'anonymous' | 'authenticated'
 export interface AuthContextValue {
   status: AuthStatus
   currentUser: MeData | null
+  accessToken: string | null
   login: (email: string, password: string) => Promise<void>
   logout: () => void
 }

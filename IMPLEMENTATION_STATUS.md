@@ -2,50 +2,54 @@
 
 ## Current milestone
 
-Playbook Step 2 — identity, tenancy, departments, and deterministic policy engine.
+Playbook Step 3 — governed synthetic-document ingestion, parsing, preview, and lifecycle management.
 
 ## Completed acceptance criteria
 
-- Tenant, company, department, role, user, membership, workspace-grant, company-grant, and
-  department-grant models are normalized and migrated.
-- The development seed creates Nora, Alice, Leo, Maya, Amir, and Lina with deterministic IDs and
-  idempotent grants.
-- Passwords use Argon2id hashes; plaintext passwords are never stored or logged.
-- `POST /api/auth/login` issues signed 15-minute JWT access tokens.
-- `GET /api/auth/me` validates signature, algorithm, issuer, audience, expiry, user status, and
-  current database membership/grant state.
-- Tokens contain identity reference claims only. Tenant, company, department, role, and scope are
-  rebuilt from PostgreSQL for protected requests.
-- Frozen `TrustedIdentity` and `AuthorizationScope` contracts feed a deterministic deny-by-default
-  RBAC/ABAC policy engine with reason-coded decisions.
-- Alice receives Orion Finance + Shared, Leo Orion Legal + Shared, Maya explicit Orion Finance +
-  Legal + Shared, Amir Atlas Finance + Shared, and Lina Atlas Legal + Shared.
-- Nora receives platform administration and Orion/Atlas upload-management capabilities with no
-  document-query capability.
-- Login errors do not distinguish an unknown user from a wrong password.
-- Forged identity, tenant, role, department, company, and scope fields are rejected or ignored.
-- React provides login, development-only demo cards, protected routing, session validation,
-  identity/scope display, safe errors, and logout.
-- Existing Step 1 health, readiness, request-ID, safe-error, and frontend-health behavior remains
-  covered by regression tests.
+- Step 1 health/error foundations and Step 2 database-derived identity and authorization remain
+  intact and covered by regression tests.
+- Eight reversible tables persist logical documents, immutable versions, ingestion jobs, PDF pages,
+  spreadsheet sheets/rows/cells, and metadata-only audit events.
+- `MANAGE_UPLOADS` is enforced per workspace and company on every options, upload, status, library,
+  preview, approval, rejection, version, and deletion operation. Nora can manage Orion and Atlas;
+  ordinary query users cannot mount or call the admin feature.
+- The backend publishes trusted tenant/company options, valid department/visibility/classification
+  triples, reporting-period requirements, and upload limits. Strict multipart metadata rejects
+  extra or inconsistent fields.
+- PDF, XLSX, and CSV validation is bounded and fail-closed. Signature/MIME mismatches, malformed or
+  encrypted/active PDFs, macros, external links, unsafe OOXML, ZIP bombs, and oversized inputs are
+  rejected with safe errors.
+- Parser workers have time and resource limits. Parsed output retains PDF page provenance and
+  spreadsheet sheet/row/cell coordinates; formula-like cell content remains inert text.
+- The exact lifecycle is `UPLOADED -> VALIDATING -> PARSING -> PREVIEW_READY`, followed by approval
+  or rejection, with separate safe validation/parsing failure states and terminal deletion.
+- Initial checksum duplicates are deterministic, while the explicit version endpoint creates the
+  next immutable version. Actor-scoped idempotency keys prevent accidental duplicate writes.
+- Approval is allowed only after a successful version-addressed preview. Rejected versions cannot
+  later be approved. Soft deletion immediately hides all versions and removes stored objects.
+- React provides capability-gated navigation, trusted cascading metadata controls, XHR upload
+  progress, abortable status polling, safe request-ID errors, a filterable library, PDF/spreadsheet
+  preview, version upload, approval/rejection, and accessible deletion confirmation.
 
 ## Pending acceptance criteria
 
-None within Step 2.
+None within Step 3.
 
 ## Verification result
 
-Verified on 2026-08-20:
+Verified on 2026-08-21:
 
-- Backend: formatting, linting, strict type checking, and 44 tests pass, including PostgreSQL-backed
-  integration and security tests.
-- Frontend: formatting, linting, strict type checking, 7 Vitest tests, and production build pass.
-- Alembic upgrade, drift check, downgrade to Step 1, re-upgrade, and double-seed idempotence pass.
-- Live login and `/api/auth/me` pass for all six synthetic identities.
-- Live forged-scope, generic-login-error, malformed-token, expired-token, and wrong-issuer probes
-  return the expected safe results.
-- Headless Chrome renders the login screen and completes Alice's real login flow to the protected
-  Orion Finance + Shared scope screen without a Vite error overlay.
+- Backend formatting, linting, strict type checking, and the full 103-test suite pass, including real
+  PostgreSQL, parser, storage, upload-security, authentication, policy, and regression coverage.
+- Frontend formatting, linting, strict type checking, Vitest, and production build pass.
+- Alembic clean upgrade, drift check, downgrade to Step 2, and re-upgrade pass; all eight Step 3
+  tables were inspected in PostgreSQL.
+- Live Nora uploads pass for the real Orion PDF (4 pages), Orion workbook (7 named sheets), and the
+  unsafe CSV fixture (formula-like strings preserved inert). Approval and deletion behave as
+  specified.
+- The fake PDF returns safe HTTP 415 with a request ID; Alice receives HTTP 403 before admin options
+  or upload work; deleted preview returns safe HTTP 404.
+- The `Simulated_data` content hash is unchanged.
 
 ## Known limitations
 
@@ -56,9 +60,14 @@ Verified on 2026-08-20:
 - There is no refresh token; a session expires after 15 minutes and the user signs in again.
 - Each synthetic user currently has one home membership. The contracts support multiple active
   membership-derived grants, but no workspace-switching UI exists.
-- Step 2 defines upload-management and query capabilities but implements no document endpoint.
-- Documents, parsing, retrieval, embeddings, LLMs, MCP, memory, calculations, agents, and AWS remain
-  intentionally absent.
+- Parsing runs synchronously behind an ingestion-job contract in this local milestone; a durable
+  distributed queue is not implemented.
+- Local object storage is for development only. Production object storage, malware scanning, and a
+  retention worker remain later hardening work.
+- Deletion is immediate and soft at the database level. A later retention process may hard-delete
+  metadata; that process is not part of Step 3.
+- Approved documents are deliberately not queryable. Retrieval, chunking, embeddings, LLMs, MCP,
+  memory, calculations, agents, and AWS remain absent.
 
 ## Test commands
 
@@ -67,4 +76,4 @@ and UI verification commands.
 
 ## Next approved milestone
 
-None. Work must stop after Step 2 until the user explicitly approves Step 3.
+None. Work stops after Step 3 until the user explicitly approves a later milestone.

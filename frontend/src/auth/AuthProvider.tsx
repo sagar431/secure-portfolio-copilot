@@ -19,9 +19,11 @@ function storedToken() {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>('loading')
   const [currentUser, setCurrentUser] = useState<MeData | null>(null)
+  const [accessToken, setAccessToken] = useState<string | null>(null)
 
   const logout = useCallback(() => {
     sessionStorage.removeItem(TOKEN_KEY)
+    setAccessToken(null)
     setCurrentUser(null)
     setStatus('anonymous')
   }, [])
@@ -35,6 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const controller = new AbortController()
     void getMe(token, controller.signal)
       .then((response) => {
+        setAccessToken(token)
         setCurrentUser(response.data)
         setStatus('authenticated')
       })
@@ -52,13 +55,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const token = tokenResponse.data.access_token
     const meResponse = await getMe(token)
     sessionStorage.setItem(TOKEN_KEY, token)
+    setAccessToken(token)
     setCurrentUser(meResponse.data)
     setStatus('authenticated')
   }, [])
 
   const value = useMemo(
-    () => ({ status, currentUser, login, logout }),
-    [status, currentUser, login, logout],
+    () => ({ status, currentUser, accessToken, login, logout }),
+    [status, currentUser, accessToken, login, logout],
   )
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

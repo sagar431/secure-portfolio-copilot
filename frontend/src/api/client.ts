@@ -4,6 +4,10 @@ const API_BASE_URL = (
   import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
 ).replace(/\/$/, '')
 
+export function apiUrl(path: string) {
+  return `${API_BASE_URL}${path}`
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -20,7 +24,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
-function isErrorEnvelope(value: unknown): value is ApiErrorEnvelope {
+export function isErrorEnvelope(value: unknown): value is ApiErrorEnvelope {
   if (!isRecord(value) || !isRecord(value.error)) {
     return false
   }
@@ -31,14 +35,16 @@ function isErrorEnvelope(value: unknown): value is ApiErrorEnvelope {
   )
 }
 
-function isSuccessEnvelope<T>(value: unknown): value is ApiSuccessEnvelope<T> {
+export function isSuccessEnvelope<T>(
+  value: unknown,
+): value is ApiSuccessEnvelope<T> {
   return (
     isRecord(value) && 'data' in value && typeof value.request_id === 'string'
   )
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST'
+  method?: 'GET' | 'POST' | 'DELETE'
   body?: unknown
   token?: string
   signal?: AbortSignal
@@ -57,7 +63,7 @@ export async function requestJson<T>(
     headers.Authorization = `Bearer ${options.token}`
   }
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetch(apiUrl(path), {
       method: options.method ?? 'GET',
       headers,
       body:

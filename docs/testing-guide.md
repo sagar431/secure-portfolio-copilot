@@ -1,4 +1,4 @@
-# Step 2 Testing Guide
+# Step 3 Testing Guide
 
 Run commands from the locations shown. Tests use only synthetic identities and an isolated tmpfs
 PostgreSQL test service.
@@ -20,10 +20,11 @@ TEST_DATABASE_URL=postgresql+asyncpg://portfolio:portfolio_test@127.0.0.1:5433/p
   uv run pytest
 ```
 
-The suite includes Step 1 regressions plus password/JWT units, policy decisions, six exact identity
-scopes, API login and `/me`, generic failures, forged fields, disabled/revoked state, seed
-idempotence, and authorization security cases. PostgreSQL-backed tests refuse any database not named
-`portfolio_test`.
+The suite includes all Step 1/2 regressions plus document state-machine units, real PDF/XLSX/CSV
+parsing, malicious container/signature/MIME cases, storage confinement and permissions, formula
+inertness, PostgreSQL-backed upload/preview/approval/rejection/version/deletion flows, safe audit
+records, idempotency, and direct backend authorization. PostgreSQL-backed tests refuse any database
+not named `portfolio_test`.
 
 ## Frontend quality checks
 
@@ -37,8 +38,11 @@ npm run test -- --run
 npm run build
 ```
 
-Vitest uses jsdom and React Testing Library. `fetch` is replaced with deterministic success or error
-responses; no backend process is required for these tests.
+Vitest uses jsdom and React Testing Library. `fetch` and XHR are replaced with deterministic success,
+progress, poll, error, and cancellation behavior; no backend process is required for these tests.
+Coverage includes capability gating, trusted option cascades, multipart metadata, safe request-ID
+errors, previews with coordinates, inert unsafe strings, decisions, filtering/version upload, and
+deletion confirmation.
 
 ## Compose and database checks
 
@@ -59,17 +63,19 @@ uv run alembic check
 DEMO_USER_PASSWORD='<choose a local 12+ character password>' \
   uv run python -m app.scripts.seed_development
 DEMO_USER_PASSWORD='<same password>' uv run python -m app.scripts.seed_development
-uv run alembic downgrade 20260820_0001
+uv run alembic downgrade 20260820_0002
 uv run alembic upgrade head
 DEMO_USER_PASSWORD='<same password>' uv run python -m app.scripts.seed_development
 ```
 
-Confirm the extension after the final upgrade:
+Confirm the extension and Step 3 tables after the final upgrade:
 
 ```bash
 cd ..
 docker compose exec -T db psql -U portfolio -d portfolio \
   -c "SELECT extname, extversion FROM pg_extension WHERE extname = 'vector';"
+docker compose exec -T db psql -U portfolio -d portfolio \
+  -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND (tablename LIKE 'document%' OR tablename LIKE 'parsed_%') ORDER BY tablename;"
 ```
 
 ## Live smoke test
@@ -95,6 +101,22 @@ Expected scopes:
 - Lina: Atlas Legal + Shared.
 - Nora: Platform administration and Orion/Atlas upload management; no query departments.
 
+As Nora, open `/admin/documents` and perform the Step 3 acceptance flow:
+
+1. Upload `Simulated_data/orion/finance/Orion_FY2025_Board_Pack.pdf` as an Orion finance financial
+   report for FY2025. Confirm four numbered preview pages, checksum/metadata, then approve it.
+2. Upload `Simulated_data/orion/finance/Orion_FY2024_FY2025_Financials.xlsx` as a spreadsheet.
+   Confirm all seven named sheets plus row/cell coordinates, then reject or approve it.
+3. Use **New version** on a manageable document. Confirm the trusted scope metadata is locked and
+   the returned version number increments. Retrying the same idempotency key must not add a version.
+4. Upload `Simulated_data/invalid_inputs/not_a_real_pdf.pdf`; expect safe HTTP 415 and a request ID.
+   Upload the unsafe CSV fixture; it may preview, but formula-like values must remain visible inert
+   text rather than executing.
+5. Sign in as Alice. The navigation link must be absent; direct navigation returns home without an
+   admin API request, and direct backend calls return a safe denial.
+6. Cancel a deletion and confirm no API mutation occurs. Then confirm deletion and verify the
+   document disappears immediately and its former preview is HTTP 404.
+
 Use an API client to add forged tenant, user, role, department, and company fields to login. The body
 must fail with safe `validation_error`. Add the same values as `/api/auth/me` query parameters or
 headers; the response must remain the database-derived user. A malformed or expired bearer token
@@ -111,3 +133,10 @@ must return `invalid_session`.
 - Login returns `invalid_credentials`: confirm the development seed ran with the same local password.
 - `/api/auth/me` returns `invalid_session`: sign in again, then confirm user and membership status in
   PostgreSQL.
+- Upload returns `unsupported_document`: confirm the extension, declared MIME, signature, and file
+  safety; renaming a file does not change its detected type.
+- Upload returns `unsafe_document`: inspect only the stable error code/request ID in the client and
+  server metadata-only logs; do not log the source file to diagnose it.
+- Preview returns `preview_unavailable`: poll the ingestion job and inspect its safe terminal status.
+- Admin routes return 403/404: confirm the current database `MANAGE_UPLOADS` grant for the exact
+  workspace/company. Do not infer authority from the UI or JWT.

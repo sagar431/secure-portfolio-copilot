@@ -131,3 +131,88 @@ Orion Legal, or an Atlas company returns a reason-coded denial.
 6. How do unknown-user and wrong-password flows avoid user enumeration?
 7. Which checks make an expired or wrong-audience token fail?
 8. Why is the React protected route not treated as a security boundary?
+
+## Step 3 — Governed document ingestion
+
+### What problem this milestone solves
+
+It turns synthetic PDF/XLSX/CSV files into bounded, attributable, previewable document versions
+without yet making them queryable. The central problem is not simply file upload: it is preserving
+tenant/company/classification authority and source provenance through validation, parsing, review,
+versioning, and deletion.
+
+### Frontend flow
+
+`CapabilityRoute` mounts `/admin/documents` only when `/api/auth/me` includes `MANAGE_UPLOADS` in at
+least one grant. The page then asks `/api/admin/ingestion/options` for manageable tenant/company
+choices and canonical classification pairs; it never builds scope from the home membership or JWT.
+Changing tenant resets company, and changing department/visibility resets classification to a
+backend-published combination. Explicit version upload locks all canonical document metadata.
+
+Native XHR reports upload-byte progress while carrying bearer auth and a generated idempotency key.
+After the bytes reach 100%, the UI switches from upload progress to backend ingestion status and
+polls without overlapping requests. A version can be approved or rejected only after its preview
+request succeeds. PDF content is shown page by page; spreadsheet content is bounded and shows sheet,
+row, and coordinate provenance. React renders every value as text, including formula-like strings.
+
+### Backend flow
+
+The multipart route parses strict JSON metadata and authorizes the target workspace/company before
+reading bytes. The service computes a request fingerprint, checks actor-scoped idempotency, validates
+the file, generates a storage key, stores verified bytes, invokes the resource-limited parser, and
+persists parsed provenance. Version and ingestion-job state advance together. Expected failures
+become stable API codes and metadata-only audit events; they do not expose content, paths, parser
+details, or storage keys.
+
+Initial upload checksum deduplication includes canonical scope metadata and only reuses an existing
+preview-ready or approved version. Creating a deliberate next version uses
+`POST /api/admin/documents/{document_id}/versions`; scope metadata cannot change. Preview, approve,
+and reject are version-addressed so an action cannot silently select the wrong version. Delete marks
+the logical document and all versions unavailable before best-effort object cleanup.
+
+### Database flow
+
+`documents` stores the canonical scope/classification tuple and current-approved pointer.
+`document_versions` stores immutable file metadata, checksum, safe storage key, counts, lifecycle,
+and reviewer attribution. `ingestion_jobs` mirrors processing state and a safe failure code.
+`parsed_pages` preserves PDF page order; `parsed_sheets`, `parsed_rows`, and `parsed_cells` preserve
+spreadsheet location. `document_audit_events` stores actor, resource identifiers, outcome, reason,
+and request ID without file content or filenames.
+
+### Heuristic versus LLM ownership
+
+Everything remains deterministic. Classification validation is an exact lookup, file safety uses
+format rules and hard limits, parsing uses maintained local libraries, lifecycle changes use a
+finite state machine, and policy uses the Step 2 engine. No LLM decides metadata, safety, parsing,
+approval, or access.
+
+### MCP tools involved
+
+None. MCP remains outside Step 3.
+
+### Security invariant
+
+A browser-selected file may influence only bounded parsed display data. It cannot choose authority,
+storage paths, executable formulas, HTML, lifecycle transitions, or query access. `MANAGE_UPLOADS`
+does not imply `QUERY_DOCUMENTS`, and approval does not activate retrieval.
+
+### Failure example
+
+Renaming arbitrary text to `report.pdf` and declaring `application/pdf` fails signature validation.
+The backend records a `VALIDATION_FAILED` attempt with a stable safe code and no raw bytes or host
+path in the response/log. Retrying with the same idempotency key does not create another version.
+Alice cannot use Nora's tenant/company IDs to bypass the denial because authorization occurs from
+Alice's freshly loaded database grants before the route reads the file.
+
+### Questions Sagar should be able to answer
+
+1. Why does the upload form use a dedicated options endpoint instead of `/api/auth/me`?
+2. Which checks run before parsing a PDF or XLSX, and which limits bound decompression?
+3. Why are preview, approval, and rejection version-addressed?
+4. What differs between initial checksum deduplication, idempotent retry, and explicit new version?
+5. Which states may transition to `APPROVED`, `REJECTED`, and `DELETED`?
+6. How are spreadsheet formulas kept inert while preserving provenance?
+7. Why is deletion committed before object cleanup, and what happens if cleanup fails?
+8. Why can Nora approve a document but still not query it?
+9. Which data is retained for a failed validation attempt, and which data is deliberately absent?
+10. What remains for Step 4, and why is none of it implemented here?

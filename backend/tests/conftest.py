@@ -1,6 +1,7 @@
 import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -33,7 +34,7 @@ async def client() -> AsyncIterator[AsyncClient]:
 
 
 @pytest_asyncio.fixture
-async def auth_harness() -> AsyncIterator[AuthHarness]:
+async def auth_harness(tmp_path: Path) -> AsyncIterator[AuthHarness]:
     database_url = os.environ.get(
         "TEST_DATABASE_URL",
         "postgresql+asyncpg://portfolio:portfolio_test@127.0.0.1:5433/portfolio_test",
@@ -49,6 +50,7 @@ async def auth_harness() -> AsyncIterator[AuthHarness]:
         jwt_issuer="integration-test-issuer",
         jwt_audience="integration-test-audience",
         demo_user_password=SecretStr(DEMO_PASSWORD),
+        document_storage_path=tmp_path / "document-storage",
     )
     test_engine = create_async_engine(database_url)
     session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
