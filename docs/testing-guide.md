@@ -5,6 +5,23 @@ PostgreSQL test service. On 2026-08-21 these commands passed with 263 backend te
 frontend tests. Automated tests configure deterministic fake embedding, LLM, Perception, Decision,
 and MCP adapters and require neither Ollama, a live model provider, a provider key, nor network access.
 
+## Focused deterministic router checks
+
+```bash
+cd backend
+uv run pytest -q \
+  tests/unit/model_routing \
+  tests/unit/chat/test_model_router.py \
+  tests/unit/test_ollama_qwen_provider.py \
+  tests/unit/test_runpod_kimi_provider.py \
+  tests/security/test_chat_security.py \
+  tests/security/test_agent_security.py
+```
+
+These tests prove deterministic simple/complex/multi-document/low-confidence/agentic selection,
+one-way fallback, exact authorized-request reuse, pinned Qwen transport, no tools or thinking,
+strict output validation, content-free failures, and Kimi-only agent stages/finalization.
+
 ## Backend quality checks
 
 ```bash
@@ -229,6 +246,19 @@ The verified 2026-08-21 run returned valid financial Perception, a valid two-ste
 `final_retry_count=0`. This proves live endpoint/model connectivity and both modes of the structured
 stages plus finalization for one synthetic case. It does not prove broad faithfulness, latency,
 cost, or availability. Never substitute fake output for this live gate.
+
+## Live dual-model router check
+
+Keep the pinned Mac Ollama endpoint running with `qwen3:8b`, retain the ignored local Runpod key,
+select `LLM_PROVIDER=router`, and run from `backend`:
+
+```bash
+uv run python -m app.scripts.live_model_router_smoke
+```
+
+The first synthetic authorized request must report `qwen3:8b/SIMPLE_LOW_RISK`; the second must
+report `kimi-k3/MULTI_DOCUMENT`. Output is bounded metadata only and must contain no credential,
+question, evidence, answer, token count, provider payload, or reasoning.
 
 ## Live smoke test
 

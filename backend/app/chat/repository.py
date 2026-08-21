@@ -95,6 +95,9 @@ def add_trace(
     output_tokens: int | None,
     latency_ms: int,
     retry_count: int,
+    route_reason_code: str = "NO_MODEL_CALL",
+    fallback_used: bool = False,
+    fallback_reason_code: str | None = None,
 ) -> None:
     session.add(
         ChatRequestTrace(
@@ -111,5 +114,8 @@ def add_trace(
             output_tokens=output_tokens,
             latency_ms=max(0, latency_ms),
             retry_count=max(0, retry_count),
+            route_reason_code=route_reason_code,
+            fallback_used=fallback_used,
+            fallback_reason_code=fallback_reason_code,
         )
     )

@@ -1,11 +1,12 @@
-# Step 8 Architecture
+# Step 8 + Deterministic Model Router Architecture
 
 ## Scope
 
 This document describes the Step 1 foundation, Step 2 identity/authorization, Step 3 governed
 synthetic-document ingestion, Step 4 secure chunk storage, Step 5 approved-version embeddings and
 authorization-first hybrid retrieval, Step 6 non-agentic grounded chat, Step 7's embedded approved
-MCP gateway, and Step 8's Perception, Decision, and bounded AgentLoop. Memory, calculations,
+MCP gateway, Step 8's Perception, Decision, and bounded AgentLoop, and the deterministic Qwen/Kimi
+router. Memory, calculations,
 arbitrary execution, remote/dynamic MCP, multi-agent coordination, and deployment remain outside
 this scope.
 
@@ -37,7 +38,10 @@ flowchart LR
     ChatAPI --> ScopePreflight[Deterministic scope preflight]
     ScopePreflight --> Search
     Search -->|authorized evidence only| Prompt[Untrusted-evidence JSON prompt]
-    Prompt --> ModelProvider[Gemini or Runpod Kimi adapter; no tools]
+    Prompt --> Router[Deterministic post-authorization router]
+    Router -->|simple, one document, high confidence| Qwen[Mac Ollama qwen3:8b; no tools/thinking]
+    Router -->|complex, multi-document, low confidence| ModelProvider[Runpod kimi-k3; no tools]
+    Qwen --> CitationValidator
     ModelProvider --> CitationValidator[Host citation validator]
     CitationValidator --> ChatRows[(Conversations + messages + safe traces)]
     CitationValidator --> Browser
@@ -289,6 +293,12 @@ flowchart TD
 ```
 
 ## LLM provider and prompt boundary
+
+Before generation, backend routing sees only the workload kind, normalized question shape,
+distinct authorized document count, and top authorized retrieval score. It does not receive or
+produce identity, grants, scope, classification, or authorization decisions. Agentic work bypasses
+the economical route and is pinned to Kimi. Retryable Qwen failures may fall forward to Kimi with
+the same authorized evidence; no strong request downgrades to Qwen.
 
 `LLMProvider` accepts a normalized question plus a tuple of host-owned `GroundedEvidence` and
 returns a structured answer draft plus safe usage metadata. Automated tests use the deterministic

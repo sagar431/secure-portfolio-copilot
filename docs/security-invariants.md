@@ -1,4 +1,4 @@
-# Step 8 Security Invariants
+# Step 8 + Interview Features Security Invariants
 
 These rules apply now and must remain true as later milestones are approved.
 
@@ -236,6 +236,20 @@ These rules apply now and must remain true as later milestones are approved.
     cannot replay; and host comparison, not the model flag, consumes the one-replan budget.
 85. **No later capabilities.** Steps 7 and 8 have no financial calculation tool, memory, sandbox,
     arbitrary execution, remote/dynamic MCP, multi-agent design, cloud deployment, or Step 9 behavior.
+86. **Routing is deterministic backend policy.** Models and clients cannot select a route or change
+    authorization. Routing inputs are host-owned workload/evidence signals only.
+87. **Authorization precedes routing.** Only rows admitted by current repository authorization may
+    contribute document count, confidence, or model context. Denial and no-evidence paths call no
+    generation model.
+88. **Strong routes never downgrade.** Multi-document, low-confidence, complex, and agentic work
+    uses Kimi. Only retryable simple-route Qwen failures may fall forward to Kimi using the exact
+    same authorized request.
+89. **Pinned no-reasoning Qwen boundary.** The Qwen endpoint/model are fixed; tools, streaming,
+    proxy inheritance, and thinking are disabled. Hidden reasoning fields are deleted and visible
+    thinking markers fail closed.
+90. **Safe route observability.** Traces contain actual model names and categorical host reason
+    codes only. Questions, evidence, prompts, provider bodies, authorization data, and model
+    reasoning remain absent.
 
 Automated tests cover password/token primitives, exact seeded scopes, policy reason codes, generic
 login errors, forged fields, malformed/expired/wrong-issuer/wrong-audience/wrong-signature tokens,

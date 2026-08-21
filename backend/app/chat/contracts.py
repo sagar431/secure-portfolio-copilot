@@ -3,6 +3,8 @@ from enum import StrEnum
 from typing import Literal, Protocol
 from uuid import UUID
 
+from app.model_routing import RouteReason, RoutingSignals
+
 
 @dataclass(frozen=True, slots=True)
 class GroundedEvidence:
@@ -25,6 +27,7 @@ class GroundedEvidence:
 class GroundedGenerationRequest:
     question: str
     evidence: tuple[GroundedEvidence, ...]
+    routing: RoutingSignals | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +49,10 @@ class LLMUsage:
     output_tokens: int | None = None
     latency_ms: int = 0
     retry_count: int = 0
+    model_name: str | None = None
+    route_reason: str | None = None
+    fallback_used: bool = False
+    fallback_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,12 +74,24 @@ class LLMProviderError(RuntimeError):
     """Content-free provider failure safe to map at the HTTP boundary."""
 
     def __init__(
-        self, code: LLMErrorCode, *, transient: bool = False, retry_count: int = 0
+        self,
+        code: LLMErrorCode,
+        *,
+        transient: bool = False,
+        retry_count: int = 0,
+        model_name: str | None = None,
+        route_reason: RouteReason | None = None,
+        fallback_used: bool = False,
+        fallback_reason: str | None = None,
     ) -> None:
         super().__init__("Language model provider is unavailable.")
         self.code = code
         self.transient = transient
         self.retry_count = retry_count
+        self.model_name = model_name
+        self.route_reason = route_reason.value if route_reason is not None else None
+        self.fallback_used = fallback_used
+        self.fallback_reason = fallback_reason
 
 
 class LLMProvider(Protocol):

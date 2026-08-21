@@ -705,3 +705,35 @@ transient responses now share one total two-call budget, preventing nested retry
 silently producing three or four upstream calls.
 
 Step 9 has not started.
+
+## Interview feature 1 — Deterministic Qwen/Kimi model routing
+
+### What problem this feature solves
+
+It sends simple authorized work to a local economical model while reserving the stronger provider
+for complex or risky workloads without letting either model influence authorization or routing.
+
+### Backend flow
+
+Authorization and hybrid retrieval finish first. Pure Python then examines workload kind, distinct
+authorized source documents, the top authorized score, and bounded comparison/complexity markers.
+Simple one-document high-confidence generation uses Mac `qwen3:8b`; multi-document,
+low-confidence, complex, and all agent stages use Runpod `kimi-k3`. Retryable Qwen failure may fall
+forward to Kimi with the identical evidence tuple. Host citation validation remains unchanged.
+
+### Heuristic versus LLM ownership
+
+Route selection, timeouts, fallback direction, provider/model allowlists, authorization, evidence,
+and trace reason codes are deterministic. Models only produce strictly validated visible JSON from
+authorized evidence. No hidden reasoning is retained or shown.
+
+### Security invariant
+
+Routing never widens scope: forbidden candidates cannot become a routing signal or model context,
+and Kimi-routed work never downgrades to Qwen. Authorization denial and missing evidence invoke no
+generation model.
+
+### Current limitation
+
+The pinned Mac endpoint uses private-LAN HTTP and is development-only. The score cutoff is a stable
+heuristic rather than a calibrated confidence probability.

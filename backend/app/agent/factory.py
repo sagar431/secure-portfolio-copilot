@@ -78,7 +78,7 @@ def create_agent_stage_providers(
     if settings.llm_provider == "disabled":
         disabled_provider = DisabledAgentProvider()
         return disabled_provider, disabled_provider
-    if settings.llm_provider == "runpod":
+    if settings.llm_provider in {"runpod", "router"}:
         if settings.runpod_api_key is None:
             disabled_provider = DisabledAgentProvider()
             return disabled_provider, disabled_provider

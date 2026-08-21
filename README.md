@@ -1,12 +1,14 @@
 # Secure Portfolio Copilot
 
-A security-first portfolio analysis copilot, complete through Playbook Step 8. In addition to
+A security-first portfolio analysis copilot, complete through Playbook Step 8 plus deterministic
+dual-model routing. In addition to
 database-revalidated identity, governed PDF/XLSX/CSV ingestion, and authorization-first hybrid
 retrieval, it provides both the Step 6 non-agentic grounded chat and a bounded single-agent path.
 The agent separates Perception and Decision, invokes only two approved document tools through an
 embedded MCP gateway with host-injected authorization, and preserves Step 6 citation validation.
-The project contains no memory, calculation engine, arbitrary execution, multi-agent system, or
-cloud deployment.
+Simple authorized grounded requests use Mac Ollama `qwen3:8b`; complex, multi-document,
+low-confidence, and agentic work uses Runpod `kimi-k3`. The project contains no memory, calculation
+engine, arbitrary execution, multi-agent system, or cloud deployment yet.
 
 ## Prerequisites
 
@@ -59,13 +61,18 @@ not register the development search or reindex routes. Since approval currently 
 document approval also fails closed in production; this branch is a local Step 5 demonstration, not
 a production embedding deployment.
 
-Add the Step 6 provider settings to the ignored local `.env`:
+Add the model-router settings to the ignored local `.env`:
 
 ```dotenv
-LLM_PROVIDER=runpod
+LLM_PROVIDER=router
 RUNPOD_API_KEY=replace-with-a-local-runpod-key
 RUNPOD_BASE_URL=https://api.runpod.ai/v2/moonshot-kimi/openai/v1
 RUNPOD_MODEL_NAME=kimi-k3
+QWEN_BASE_URL=http://192.168.31.213:11434
+QWEN_MODEL_NAME=qwen3:8b
+QWEN_TIMEOUT_SECONDS=15
+QWEN_MAX_OUTPUT_TOKENS=1024
+ROUTER_LOW_CONFIDENCE_THRESHOLD=0.55
 LLM_TIMEOUT_SECONDS=60
 LLM_MAX_OUTPUT_TOKENS=1024
 LLM_MAX_EVIDENCE_CHUNKS=5
@@ -77,7 +84,8 @@ AGENT_TOOL_TIMEOUT_SECONDS=10
 AGENT_TOOL_MAX_TRANSIENT_RETRIES=1
 ```
 
-The Runpod base URL and `kimi-k3` model are fixed by settings validation. Kimi requires temperature
+Both endpoints and model IDs are fixed by settings validation. Qwen is a development-only LAN
+endpoint with tools/thinking disabled and strict structured output. Kimi requires temperature
 exactly `1` and at least 1,024 output tokens because reasoning consumes the same output budget. The
 adapter deletes `reasoning_content` at the provider boundary, never exposes it, strictly validates
 visible JSON with Pydantic, and permits at most two total calls for a transient, malformed, or
@@ -212,6 +220,26 @@ desktop service), then run `ollama pull nomic-embed-text:v1.5` in a separate she
 the backend. Run `uv run python -m app.scripts.live_runpod_kimi_smoke` separately from `backend`;
 it prints only bounded contract metadata and never prints the key, prompts, evidence, answer text,
 token counts, provider body, or reasoning. Automated tests use no live provider.
+
+For the final live dual-route contract check, keep Mac Ollama running with `qwen3:8b` and run from
+`backend`:
+
+```bash
+uv run python -m app.scripts.live_model_router_smoke
+```
+
+The smoke prints only model/route/status/count/latency metadata. It never prints credentials,
+questions, evidence, answers, provider bodies, token counts, or model reasoning.
+
+## Deterministic model routing
+
+Routing runs in backend code only after authorization-first retrieval. Simple, high-confidence,
+single-document grounded answers use Qwen. Multi-document evidence, low retrieval confidence,
+bounded complex/comparison language, and every AgentLoop stage use Kimi. A retryable Qwen timeout,
+transport failure, or invalid structured response may fall forward to Kimi using the exact same
+authorized evidence. Kimi work never falls back to Qwen, and authorization denial/no-evidence paths
+call neither model. Sanitized traces store the actual model and categorical route/fallback reason,
+never model rationale or chain-of-thought.
 
 Stop the application processes with `Ctrl+C`. Stop the database without deleting its volume:
 

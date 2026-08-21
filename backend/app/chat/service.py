@@ -24,6 +24,7 @@ from app.chat.repository import (
 )
 from app.chat.scope_guard import request_matches_authorized_scope, resolve_home_tenant_id
 from app.core.errors import APIError
+from app.model_routing import RoutingSignals, WorkloadKind
 from app.models.chat import Conversation
 from app.models.identity import Capability
 from app.policies.models import AuthorizationContext
@@ -271,7 +272,18 @@ class GroundedChatService:
 
         try:
             generation = await self.llm_provider.generate(
-                GroundedGenerationRequest(question=question, evidence=evidence)
+                GroundedGenerationRequest(
+                    question=question,
+                    evidence=evidence,
+                    routing=RoutingSignals(
+                        workload=WorkloadKind.GROUNDED_ANSWER,
+                        question=question,
+                        authorized_document_count=len(
+                            {item.document_id for item in sufficient_results}
+                        ),
+                        top_retrieval_score=max(item.scores.final for item in sufficient_results),
+                    ),
+                )
             )
         except LLMProviderError as exc:
             add_trace(
@@ -279,7 +291,7 @@ class GroundedChatService:
                 request_id=request_id,
                 conversation=conversation,
                 user_id=context.identity.user_id,
-                model_name=self.llm_provider.model_name,
+                model_name=exc.model_name or self.llm_provider.model_name,
                 status="provider_error",
                 reason_code=f"LLM_{exc.code.value}",
                 document_ids=tuple(dict.fromkeys(item.document_id for item in evidence)),
@@ -288,6 +300,9 @@ class GroundedChatService:
                 output_tokens=None,
                 latency_ms=int((time.monotonic() - started) * 1000),
                 retry_count=exc.retry_count,
+                route_reason_code=exc.route_reason or "PROVIDER_SELECTED",
+                fallback_used=exc.fallback_used,
+                fallback_reason_code=exc.fallback_reason,
             )
             await self.session.commit()
             logger.warning(
@@ -371,7 +386,7 @@ class GroundedChatService:
             request_id=request_id,
             conversation=conversation,
             user_id=context.identity.user_id,
-            model_name=self.llm_provider.model_name,
+            model_name=usage.model_name or self.llm_provider.model_name,
             status=trace_status,
             reason_code=reason_code,
             document_ids=tuple(dict.fromkeys(item.document_id for item in evidence)),
@@ -380,6 +395,9 @@ class GroundedChatService:
             output_tokens=usage.output_tokens,
             latency_ms=usage.latency_ms,
             retry_count=usage.retry_count,
+            route_reason_code=usage.route_reason or "PROVIDER_SELECTED",
+            fallback_used=usage.fallback_used,
+            fallback_reason_code=usage.fallback_reason,
         )
         await self.session.commit()
         logger.info(

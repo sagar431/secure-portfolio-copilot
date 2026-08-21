@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.ollama_qwen import QWEN_BASE_URL, QWEN_MODEL
 from app.runpod_kimi import (
     RUNPOD_KIMI_BASE_URL,
     RUNPOD_KIMI_MIN_OUTPUT_TOKENS,
@@ -45,13 +46,18 @@ class Settings(BaseSettings):
     embedding_max_chunks: int = Field(default=512, ge=1, le=2048)
     embedding_timeout_seconds: float = Field(default=30.0, ge=1.0, le=120.0)
     embedding_operation_timeout_seconds: float = Field(default=120.0, ge=1.0, le=300.0)
-    llm_provider: Literal["gemini", "runpod", "fake", "disabled"] = "gemini"
+    llm_provider: Literal["router", "gemini", "runpod", "fake", "disabled"] = "gemini"
     gemini_api_key: SecretStr | None = None
     llm_model_name: str = "gemini-3.7-flash"
     llm_thinking_level: str = "medium"
     runpod_api_key: SecretStr | None = None
     runpod_base_url: str = RUNPOD_KIMI_BASE_URL
     runpod_model_name: str = RUNPOD_KIMI_MODEL
+    qwen_base_url: str = QWEN_BASE_URL
+    qwen_model_name: str = QWEN_MODEL
+    qwen_timeout_seconds: float = Field(default=15.0, ge=1.0, le=30.0)
+    qwen_max_output_tokens: int = Field(default=1024, ge=256, le=2048)
+    router_low_confidence_threshold: float = Field(default=0.55, ge=0.0, le=1.0)
     llm_timeout_seconds: float = Field(default=30.0, ge=1.0, le=60.0)
     llm_max_output_tokens: int = Field(default=1024, ge=256, le=2048)
     llm_max_evidence_chunks: int = Field(default=5, ge=1, le=10)
@@ -79,13 +85,20 @@ class Settings(BaseSettings):
                 raise ValueError("LLM_MODEL_NAME must be gemini-3.7-flash")
             if self.llm_thinking_level != "medium":
                 raise ValueError("LLM_THINKING_LEVEL must be medium")
-        if self.llm_provider == "runpod":
+        if self.llm_provider in {"runpod", "router"}:
             if self.runpod_base_url != RUNPOD_KIMI_BASE_URL:
                 raise ValueError("RUNPOD_BASE_URL must be the approved Kimi endpoint")
             if self.runpod_model_name != RUNPOD_KIMI_MODEL:
                 raise ValueError("RUNPOD_MODEL_NAME must be kimi-k3")
             if self.llm_max_output_tokens < RUNPOD_KIMI_MIN_OUTPUT_TOKENS:
                 raise ValueError("Runpod Kimi requires at least 1024 output tokens")
+        if self.llm_provider == "router":
+            if self.qwen_base_url != QWEN_BASE_URL:
+                raise ValueError("QWEN_BASE_URL must be the approved Mac Ollama endpoint")
+            if self.qwen_model_name != QWEN_MODEL:
+                raise ValueError("QWEN_MODEL_NAME must be qwen3:8b")
+            if self.app_env == "production":
+                raise ValueError("The LAN model router is unavailable in production")
         if self.app_env == "production" and self.embedding_provider != "disabled":
             raise ValueError("Development embedding providers are unavailable in production")
         if self.app_env == "production" and self.llm_provider == "fake":
@@ -98,7 +111,7 @@ class Settings(BaseSettings):
             raise ValueError("GEMINI_API_KEY must be configured for the Gemini provider")
         if (
             self.app_env == "production"
-            and self.llm_provider == "runpod"
+            and self.llm_provider in {"runpod", "router"}
             and self.runpod_api_key is None
         ):
             raise ValueError("RUNPOD_API_KEY must be configured for the Runpod provider")

@@ -10,7 +10,7 @@ from app.agent.loop import AgentLoop
 from app.agent.models import AgentLoopLimits
 from app.agent.service import AgentRunService
 from app.auth.dependencies import CurrentAuthorizationContext
-from app.chat.factory import create_llm_provider
+from app.chat.factory import create_agent_finalizer
 from app.core.config import Settings, get_settings
 from app.db.session import get_db_session
 from app.embeddings.factory import create_embedding_provider
@@ -43,7 +43,7 @@ def get_agent_run_service(
         perception=perception,
         decision=decision,
         gateway=AgentGatewayAdapter(gateway),
-        finalizer=create_llm_provider(settings),
+        finalizer=create_agent_finalizer(settings),
         limits=AgentLoopLimits(
             max_steps=settings.agent_max_steps,
             max_replans=settings.agent_max_replans,

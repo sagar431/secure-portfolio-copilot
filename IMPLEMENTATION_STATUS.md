@@ -2,13 +2,27 @@
 
 ## Current step
 
-Playbook Steps 7 and 8 are implementation-complete — Step 7 provides the embedded approved MCP gateway and two
+Playbook Steps 7 and 8 plus interview feature 1 (deterministic model routing) are
+implementation-complete — Step 7 provides the embedded approved MCP gateway and two
 authorization-revalidating document tools; Step 8 provides separate typed Perception and Decision
 stages plus the host-owned bounded AgentLoop. The Step 6 grounded path remains intact. Live Runpod
-Kimi Perception, typed-catalog Decision, and grounded final-answer contracts pass. Step 9 has not
-started.
+Kimi Perception, typed-catalog Decision, and grounded final-answer contracts pass. Simple,
+single-document, high-confidence grounded answers route to Mac Ollama `qwen3:8b`; complex,
+multi-document, low-confidence, and all agentic stages route to Runpod `kimi-k3`. Secure memory and
+deterministic financial calculations remain pending.
 
 ## Implemented
+
+- A pure host-owned model policy runs only after authorization-first retrieval. It uses workload
+  kind, distinct authorized document count, top authorized retrieval score, and bounded query-shape
+  rules; no model, prompt, identity claim, or client field can choose authority or override a route.
+- The Qwen adapter is pinned to `http://192.168.31.213:11434` and `qwen3:8b`, disables environment
+  proxy inheritance, tools, streaming, and thinking, validates strict grounded JSON, rejects visible
+  thinking markers, and has its own timeout. Retryable Qwen failures may fall forward to Kimi;
+  Kimi-first work never downgrades to Qwen.
+- Agent Perception, Decision, and finalization remain explicitly pinned to Kimi in router mode.
+  Authorized evidence objects are reused unchanged on fallback. Migration `20260821_0007` records
+  only the actual model, allow-listed route/fallback reason codes, and a fallback flag.
 
 - All completed Step 1–5 identity, authorization, ingestion, lifecycle, chunking, embedding, hybrid
   retrieval, citation, and evaluation behavior remains in place.
@@ -92,7 +106,8 @@ started.
 
 ## Pending acceptance criteria
 
-Live Runpod Kimi Perception, typed-catalog Decision, and grounded finalization passed. A full
+Live dual-route Qwen/Kimi verification remains part of the final three-feature gate. Live Runpod
+Kimi Perception, typed-catalog Decision, and grounded finalization passed. A full
 database-backed authorized agent API workflow remains a separate manual acceptance gate. Every
 deterministic backend/frontend, local MCP, migration, security, and repository-integrity gate from
 the Step 8 checkpoint passed.
@@ -140,6 +155,11 @@ places malformed/incomplete responses inside the same strict two-attempt total b
 failures.
 
 ## Known limitations
+
+- The Mac Qwen endpoint is development-only plaintext HTTP on a pinned private-LAN address. It is
+  rejected in production; a production deployment requires an authenticated, encrypted approved
+  economical-model endpoint. The retrieval score threshold is a deterministic routing heuristic,
+  not a calibrated probability.
 
 - The agent trace is response-only; Steps 7 and 8 do not add AgentRun/Plan/Step/Observation persistence or
   a trace-history endpoint. Existing message content and metadata-only request traces still persist.
