@@ -26,11 +26,17 @@ from app.agent.models import (
     TraceStatus,
 )
 from app.agent.plan_state import PlanContractError, PlanExhaustedError, PlanState
+from app.calculations.contracts import CalculationMetric, CalculationResult
 from app.chat.contracts import GroundedEvidence, GroundedGenerationRequest, LLMProviderError
 from app.chat.service import GroundingValidationError, validate_grounded_answer
 from app.mcp_gateway.contracts import PermittedToolDescriptor
 from app.policies.models import AuthorizationContext
-from app.schemas.chat import GroundedCitationData, GroundedClaimData
+from app.schemas.chat import (
+    CalculationData,
+    CalculationInputData,
+    GroundedCitationData,
+    GroundedClaimData,
+)
 
 _T = TypeVar("_T")
 _INSUFFICIENT = "I don't have sufficient authorized evidence to answer that question."
@@ -39,7 +45,14 @@ _CLARIFY = "Please clarify the document question you want answered."
 _FAILED = "The agent could not complete the request safely."
 _SEARCH_TOOL = "portfolio.search_authorized_documents"
 _EXCERPT_TOOL = "portfolio.get_document_excerpt"
-_TRACE_SAFE_TOOL_NAMES = frozenset({_SEARCH_TOOL, _EXCERPT_TOOL})
+_CALCULATOR_TOOLS = frozenset(
+    {
+        "portfolio.calculate_ebitda_margin",
+        "portfolio.calculate_revenue_growth",
+        "portfolio.calculate_net_profit_margin",
+    }
+)
+_TRACE_SAFE_TOOL_NAMES = frozenset({_SEARCH_TOOL, _EXCERPT_TOOL, *_CALCULATOR_TOOLS})
 
 
 class AgentLoop:
@@ -452,6 +465,16 @@ class AgentLoop:
                     "completed_steps": plan_state.completed_history,
                 }
             )
+            if observation.calculations:
+                return self._finalize_calculations(
+                    session=session,
+                    calculations=observation.calculations,
+                    evidence=observation.evidence,
+                    trace=trace,
+                    step_count=step_count,
+                    replan_count=replan_count,
+                    retry_count=retry_count,
+                )
             remaining_budgets = RemainingBudgets(
                 tool_steps=max(0, self._limits.max_steps - step_count),
                 retrieval_rewrites=max(
@@ -554,6 +577,110 @@ class AgentLoop:
             session = session.model_copy(
                 update={"plans": plan_state.versions, "replan_count": replan_count}
             )
+
+    def _finalize_calculations(
+        self,
+        *,
+        session: AgentSession,
+        calculations: tuple[CalculationResult, ...],
+        evidence: tuple[GroundedEvidence, ...],
+        trace: list[TraceEvent],
+        step_count: int,
+        replan_count: int,
+        retry_count: int,
+    ) -> AgentRunOutcome:
+        if len(calculations) != 1:
+            return self._terminal(
+                session,
+                TerminalStatus.FAILED,
+                StoppingReason.TOOL_ERROR,
+                trace,
+                step_count,
+                replan_count,
+                retry_count,
+            )
+        calculation = calculations[0]
+        if len(evidence) != len(calculation.trusted_inputs):
+            return self._terminal(
+                session,
+                TerminalStatus.FAILED,
+                StoppingReason.TOOL_ERROR,
+                trace,
+                step_count,
+                replan_count,
+                retry_count,
+            )
+        citation_ids = tuple(item.evidence_id for item in evidence)
+        citations = tuple(
+            GroundedCitationData(
+                citation_id=item.evidence_id,
+                document_id=item.document_id,
+                document_version_id=item.document_version_id,
+                chunk_id=item.chunk_id,
+                document_title=item.document_title,
+                version_number=item.version_number,
+                excerpt=item.excerpt,
+                page_number=item.page_number,
+                sheet_name=item.sheet_name,
+                row_start=item.row_start,
+                row_end=item.row_end,
+                cell_start=item.cell_start,
+                cell_end=item.cell_end,
+            )
+            for item in evidence
+        )
+        metric_label = {
+            CalculationMetric.EBITDA_MARGIN: "EBITDA margin",
+            CalculationMetric.REVENUE_GROWTH: "Revenue growth",
+            CalculationMetric.NET_PROFIT_MARGIN: "Net profit margin",
+        }[calculation.metric]
+        claim_text = (
+            f"{metric_label} for {calculation.company_slug} in {calculation.period} "
+            f"is {calculation.result:.2f}%."
+        )
+        calculation_data = CalculationData(
+            calculation_id=calculation.calculation_id,
+            metric=calculation.metric.value,
+            company_slug=calculation.company_slug,
+            period=calculation.period,
+            formula=calculation.formula,
+            trusted_inputs=tuple(
+                CalculationInputData(
+                    name=trusted.name,
+                    period=trusted.period,
+                    value=trusted.value,
+                    unit=trusted.unit,
+                    citation_id=source.evidence_id,
+                )
+                for trusted, source in zip(calculation.trusted_inputs, evidence, strict=True)
+            ),
+            result=calculation.result,
+            unit=calculation.unit,
+            citation_ids=citation_ids,
+        )
+        trace.append(
+            self._event(
+                TraceEventType.FINALIZATION,
+                TraceStatus.COMPLETED,
+                "DETERMINISTIC_CALCULATION_VALIDATED",
+                evidence_ids=citation_ids,
+            )
+        )
+        return self._terminal(
+            session,
+            TerminalStatus.COMPLETED,
+            StoppingReason.COMPLETED,
+            trace,
+            step_count,
+            replan_count,
+            retry_count,
+            answer=" ".join(
+                f"{claim_text} [{', '.join(citation_ids)}] Formula: {calculation.formula}.".split()
+            ),
+            claims=(GroundedClaimData(text=claim_text, citation_ids=citation_ids),),
+            citations=citations,
+            calculations=(calculation_data,),
+        )
 
     async def _finalize(
         self,
@@ -664,9 +791,10 @@ class AgentLoop:
         claims: tuple[GroundedClaimData, ...] = (),
         citations: tuple[GroundedCitationData, ...] = (),
         limitations: tuple[str, ...] = (),
+        calculations: tuple[CalculationData, ...] = (),
     ) -> AgentRunOutcome:
-        if status != TerminalStatus.COMPLETED and (claims or citations):
-            raise ValueError("Only completed outcomes may carry claims or citations")
+        if status != TerminalStatus.COMPLETED and (claims or citations or calculations):
+            raise ValueError("Only completed outcomes may carry claims, citations, or calculations")
         terminal_trace_status = (
             TraceStatus.COMPLETED if status == TerminalStatus.COMPLETED else TraceStatus.TERMINATED
         )
@@ -691,6 +819,7 @@ class AgentLoop:
             claims=claims,
             citations=citations,
             limitations=limitations,
+            calculations=calculations,
             step_count=step_count,
             replan_count=replan_count,
             retry_count=retry_count,

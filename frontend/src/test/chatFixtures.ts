@@ -72,6 +72,7 @@ export const agentRunData: AgentRunData = {
     citation_id: 'ev_1',
   })),
   limitations: groundedAnswerData.limitations,
+  calculations: [],
   step_count: 1,
   replan_count: 0,
   retry_count: 0,
@@ -102,6 +103,99 @@ export const agentRunData: AgentRunData = {
       duration_ms: 0,
       evidence_reference_ids: ['ev_1'],
       reason_code: 'COMPLETED',
+    },
+  ],
+}
+
+const calculationCitations = [
+  {
+    ...groundedAnswerData.citations[0],
+    citation_id: 'ev_1',
+    chunk_id: '10101010-1010-4010-8010-101010101010',
+    row_start: 2,
+    row_end: 2,
+    cell_start: 'C2',
+    cell_end: 'C2',
+  },
+  {
+    ...groundedAnswerData.citations[0],
+    citation_id: 'ev_2',
+    chunk_id: '20202020-2020-4020-8020-202020202020',
+    row_start: 3,
+    row_end: 3,
+    cell_start: 'C3',
+    cell_end: 'C3',
+  },
+  {
+    ...groundedAnswerData.citations[0],
+    citation_id: 'ev_3',
+    chunk_id: '30303030-3030-4030-8030-303030303030',
+    row_start: 4,
+    row_end: 4,
+    cell_start: 'C4',
+    cell_end: 'C4',
+  },
+]
+
+export const calculationRunData: AgentRunData = {
+  ...agentRunData,
+  answer:
+    'Orion EBITDA margin for FY2025 is 10.00%, calculated by trusted host code.',
+  claims: [
+    {
+      text: 'Orion EBITDA margin for FY2025 is 10.00%.',
+      citation_ids: ['ev_1', 'ev_2', 'ev_3'],
+    },
+  ],
+  citations: calculationCitations,
+  calculations: [
+    {
+      calculation_id: '78787878-7878-4787-8787-787878787878',
+      metric: 'ebitda_margin',
+      company_slug: 'orion-main',
+      period: 'FY2025',
+      formula:
+        '((Revenue - Cost of Goods Sold - Operating Expenses (excl. D&A)) / Revenue) × 100',
+      trusted_inputs: [
+        {
+          name: 'Revenue',
+          period: 'FY2025',
+          value: 1000,
+          unit: 'INR crore',
+          citation_id: 'ev_1',
+        },
+        {
+          name: 'Cost of Goods Sold',
+          period: 'FY2025',
+          value: 650,
+          unit: 'INR crore',
+          citation_id: 'ev_2',
+        },
+        {
+          name: 'Operating Expenses (excl. D&A)',
+          period: 'FY2025',
+          value: 250,
+          unit: 'INR crore',
+          citation_id: 'ev_3',
+        },
+      ],
+      result: 10,
+      unit: 'percent',
+      citation_ids: ['ev_1', 'ev_2', 'ev_3'],
+    },
+  ],
+  trace: [
+    agentRunData.trace[0],
+    {
+      ...agentRunData.trace[1],
+      action_name: 'portfolio.calculate_ebitda_margin',
+      evidence_reference_ids: ['ev_1', 'ev_2', 'ev_3'],
+      reason_code: 'TOOL_COMPLETED',
+    },
+    {
+      ...agentRunData.trace[2],
+      evidence_reference_ids: ['ev_1', 'ev_2', 'ev_3'],
+      reason_code: 'DETERMINISTIC_CALCULATION_VALIDATED',
     },
   ],
 }

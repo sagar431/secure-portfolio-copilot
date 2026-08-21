@@ -13,6 +13,7 @@ import { ApiError } from '../api/client'
 import { AuthContext, type AuthContextValue } from '../auth/context'
 import {
   agentRunData,
+  calculationRunData,
   conversationData,
   groundedAnswerData,
   insufficientAnswerData,
@@ -199,6 +200,35 @@ describe('ChatPage', () => {
       screen.getByRole('dialog', { name: 'orion-finance.xlsx' }),
     ).toBeInTheDocument()
     expect(document.querySelector('script')).toBeNull()
+  })
+
+  it('renders deterministic formula, trusted inputs, result, and evidence controls', async () => {
+    vi.mocked(chatApi.runConversationAgent).mockResolvedValueOnce({
+      data: calculationRunData,
+      request_id: 'calculation-run-request',
+    })
+    renderPage()
+    await screen.findByRole('heading', { name: 'Orion finance review' })
+    fireEvent.change(screen.getByLabelText('Ask about approved documents'), {
+      target: { value: 'Calculate Orion EBITDA margin for FY2025.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run bounded agent' }))
+
+    const card = await screen.findByRole('article', {
+      name: 'EBITDA margin calculation',
+    })
+    expect(within(card).getByText('10.00%')).toBeInTheDocument()
+    expect(
+      within(card).getByText(calculationRunData.calculations[0].formula),
+    ).toBeInTheDocument()
+    expect(within(card).getByText('1000 INR crore')).toBeInTheDocument()
+    expect(
+      within(card).getByText(/arithmetic was performed by host code/i),
+    ).toBeInTheDocument()
+
+    fireEvent.click(within(card).getByRole('button', { name: 'ev_1' }))
+    const drawer = screen.getByRole('dialog', { name: 'orion-finance.xlsx' })
+    expect(within(drawer).getByText('C2')).toBeInTheDocument()
   })
 
   it('creates a private conversation automatically before the first question', async () => {

@@ -86,6 +86,26 @@ class GroundedMessageData(BaseModel):
     limitations: tuple[str, ...]
 
 
+class CalculationInputData(BaseModel):
+    name: str
+    period: str
+    value: float
+    unit: Literal["INR crore"]
+    citation_id: str
+
+
+class CalculationData(BaseModel):
+    calculation_id: UUID
+    metric: Literal["ebitda_margin", "revenue_growth", "net_profit_margin"]
+    company_slug: str
+    period: str
+    formula: str
+    trusted_inputs: tuple[CalculationInputData, ...]
+    result: float
+    unit: Literal["percent"]
+    citation_ids: tuple[str, ...]
+
+
 class AgentTraceEventData(BaseModel):
     event_id: UUID
     event_type: Literal[
@@ -123,6 +143,7 @@ class AgentRunMessageData(BaseModel):
     claims: tuple[GroundedClaimData, ...]
     citations: tuple[GroundedCitationData, ...]
     limitations: tuple[str, ...]
+    calculations: tuple[CalculationData, ...]
     step_count: int = Field(ge=0)
     replan_count: int = Field(ge=0)
     retry_count: int = Field(ge=0)

@@ -8,8 +8,16 @@ from uuid import uuid4
 import pytest
 from pydantic import BaseModel, ValidationError
 
+from app.calculations.contracts import (
+    CalculationCitation,
+    CalculationMetric,
+    CalculationResult,
+    TrustedCalculationInput,
+)
 from app.mcp_gateway.contracts import (
     ApprovedToolName,
+    CalculateFinancialMetricInput,
+    CalculationPayload,
     EvidenceLocation,
     GatewayReasonCode,
     GetDocumentExcerptInput,
@@ -81,6 +89,47 @@ def _payload(*, excerpt: str = "Authorized evidence") -> ToolPayload:
     )
 
 
+def _calculation_payload() -> CalculationPayload:
+    citation = CalculationCitation(
+        document_id=uuid4(),
+        document_version_id=uuid4(),
+        chunk_id=uuid4(),
+        document_title="Financials.xlsx",
+        version_number=1,
+        excerpt="Authorized financial input",
+        row_start=4,
+        row_end=4,
+        cell_start="A4",
+        cell_end="D4",
+    )
+    return CalculationPayload(
+        calculations=(
+            CalculationResult(
+                calculation_id=uuid4(),
+                metric=CalculationMetric.REVENUE_GROWTH,
+                company_slug="portfolio",
+                period="FY2025",
+                formula="((current - prior) / prior) × 100",
+                trusted_inputs=(
+                    TrustedCalculationInput(
+                        name="Revenue",
+                        period="FY2024",
+                        value=100,
+                        citation=citation,
+                    ),
+                    TrustedCalculationInput(
+                        name="Revenue",
+                        period="FY2025",
+                        value=120,
+                        citation=citation,
+                    ),
+                ),
+                result=20,
+            ),
+        )
+    )
+
+
 class FakeAdapter:
     required_capability = Capability.QUERY_DOCUMENTS
     output_model: type[BaseModel] = ToolPayload
@@ -90,10 +139,14 @@ class FakeAdapter:
         name: ApprovedToolName,
         input_model: type[BaseModel],
         responses: Sequence[object] = (),
+        output_model: type[BaseModel] = ToolPayload,
     ) -> None:
         self.name = name
         self.input_model = input_model
-        self._responses = list(responses) or [_payload()]
+        self.output_model = output_model
+        self._responses = list(responses) or [
+            _calculation_payload() if output_model is CalculationPayload else _payload()
+        ]
         self.call_count = 0
         self.seen_scope: AuthorizationScope | None = None
 
@@ -142,8 +195,20 @@ def _gateway(
         ApprovedToolName.GET_DOCUMENT_EXCERPT,
         GetDocumentExcerptInput,
     )
+    calculator_adapters = [
+        FakeAdapter(
+            name,
+            CalculateFinancialMetricInput,
+            output_model=CalculationPayload,
+        )
+        for name in (
+            ApprovedToolName.CALCULATE_EBITDA_MARGIN,
+            ApprovedToolName.CALCULATE_REVENUE_GROWTH,
+            ApprovedToolName.CALCULATE_NET_PROFIT_MARGIN,
+        )
+    ]
     gateway = ApprovedToolGateway(
-        [search_adapter, excerpt_adapter],
+        [search_adapter, excerpt_adapter, *calculator_adapters],
         timeout_seconds=timeout_seconds,
     )
     return gateway, search_adapter, excerpt_adapter
@@ -233,6 +298,29 @@ async def test_strict_schema_rejects_coercion_and_ownership_fields() -> None:
     assert coerced.reason_code == GatewayReasonCode.INPUT_SCHEMA_REJECTED
     assert tenant_override.reason_code == GatewayReasonCode.INPUT_SCHEMA_REJECTED
     assert search.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_calculator_schema_rejects_model_supplied_numbers_and_scope() -> None:
+    gateway, _, _ = _gateway()
+    scope = _authorization_scope()
+    tool_name = ApprovedToolName.CALCULATE_EBITDA_MARGIN
+
+    forged = await gateway.execute(
+        tool_name=tool_name,
+        arguments={
+            "company_slug": "portfolio",
+            "reporting_period": "FY2025",
+            "revenue": 1_000,
+            "tenant_id": str(uuid4()),
+        },
+        authorization_scope=scope,
+        permitted_tools=frozenset({tool_name}),
+        request_id="request-1",
+    )
+
+    assert forged.reason_code == GatewayReasonCode.INPUT_SCHEMA_REJECTED
+    assert forged.calculations == ()
 
 
 @pytest.mark.asyncio

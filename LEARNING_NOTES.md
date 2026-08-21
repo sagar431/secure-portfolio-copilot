@@ -620,7 +620,7 @@ host-reconstructed citations.
 
 Internal AgentSession state legitimately needs the question, structured observations, and
 authorized evidence while the request runs. The browser does not. The response timeline contains
-only host UUID event IDs, stage/status, two exact tool names, host `ev_N` references, durations,
+only host UUID event IDs, stage/status, five exact tool names, host `ev_N` references, durations,
 counters, and allow-listed reason/stopping codes. Model reason codes are replaced by host constants.
 The client rejects extra fields and even well-shaped but non-allow-listed identifiers.
 
@@ -632,7 +632,7 @@ stored.
 ### Current limitations
 
 The embedded MCP server is in-process and static. There is no remote transport, dynamic discovery,
-memory, financial calculation, sandbox, multi-agent coordination, or trace-history API. Perception/
+sandbox, multi-agent coordination, arbitrary calculation engine, or trace-history API. Perception/
 Decision quality is not an authorization boundary and the live smoke is one synthetic contract
 check, not a planning-quality benchmark. Message history is still not reloaded or supplied to the
 agent.
@@ -643,7 +643,7 @@ agent.
 2. Why must raw action JSON be validated before the MCP SDK sees it?
 3. Where is `AuthorizationScope` created, injected, and revalidated?
 4. Why does request-specific discovery not replace call-time authorization?
-5. Which two MCP tools exist, and why is their namespace static?
+5. Which two document MCP tools form the Step 7 foundation, and why is their namespace static?
 6. What causes application startup to fail?
 7. How do max steps, search rewrites, replans, retries, and duration differ?
 8. Why is an unflagged changed plan still a replan?
@@ -704,7 +704,7 @@ server-side JSON schema guidance is not enough: the host failed closed. Malforme
 transient responses now share one total two-call budget, preventing nested retry layers from
 silently producing three or four upstream calls.
 
-Step 9 has not started.
+Step 9 is implemented by interview feature 3 below.
 
 ## Interview feature 1 — Deterministic Qwen/Kimi model routing
 
@@ -766,3 +766,43 @@ Memory can affect presentation preferences but is not factual evidence. It is se
 separate `authorized_untrusted_memory` collection, bounded and company-matched, with explicit rules
 that embedded commands are inert and memory cannot support claims or citations. Host citation
 validation remains document-evidence-only.
+
+## Interview feature 3 / Step 9 — Deterministic financial calculators
+
+### Why the model never supplies the numbers
+
+A model may identify the requested company, period, and fixed metric, but those hints are not
+financial inputs. The MCP contract accepts only `company_slug` and `reporting_period`; strict raw
+validation rejects revenue, formulas, units, tenant IDs, and every unknown field. Host scope is
+injected separately.
+
+### Authorization and data flow
+
+For each call, repository code derives current Finance/company access and starts from materialized
+authorized chunks. It accepts one approved P&L workbook, reads only literal bounded numeric cells
+with `INR crore` units, and binds every required cell to one currently authorized chunk. Missing
+labels/periods, formulas, malformed values, ambiguity, revoked scope, and zero denominators produce
+safe typed failures with no result.
+
+### Arithmetic and finalization ownership
+
+Fixed host functions use `Decimal` to calculate EBITDA margin, year-over-year revenue growth, and
+net profit margin. The returned object exposes the exact formula, each trusted input and unit, the
+rounded percentage, and exact cell provenance. The AgentLoop assigns host evidence IDs and builds
+the final claim/citations deterministically, bypassing LLM finalization so the model cannot alter
+the arithmetic or copy it incorrectly.
+
+### Frontend boundary
+
+The calculation card displays result, formula, input names/periods/values/units, and evidence
+buttons. The client verifies exact keys, finite bounds, metric/unit enums, ordered input citation
+IDs, the complete claim/citation graph, and approved trace values before rendering inert text.
+
+### Questions Sagar should be able to answer
+
+1. Why are company and period safe model arguments while numeric inputs are not?
+2. How does an authorized chunk constrain use of a parsed spreadsheet cell?
+3. Which invalid workbook/cell conditions fail closed?
+4. Why does calculation success bypass the grounded LLM finalizer?
+5. What exact provenance accompanies every input?
+6. Why is no new migration required for calculations?

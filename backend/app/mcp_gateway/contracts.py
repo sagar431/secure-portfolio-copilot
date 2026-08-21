@@ -7,6 +7,7 @@ from uuid import UUID
 from openpyxl.utils.cell import coordinate_to_tuple
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.calculations.contracts import CalculationResult
 from app.retrieval.limits import (
     MAX_EXCERPT_CHARACTERS,
     MAX_QUERY_CHARACTERS,
@@ -21,6 +22,9 @@ class StrictGatewayModel(BaseModel):
 class ApprovedToolName(StrEnum):
     SEARCH_AUTHORIZED_DOCUMENTS = "portfolio.search_authorized_documents"
     GET_DOCUMENT_EXCERPT = "portfolio.get_document_excerpt"
+    CALCULATE_EBITDA_MARGIN = "portfolio.calculate_ebitda_margin"
+    CALCULATE_REVENUE_GROWTH = "portfolio.calculate_revenue_growth"
+    CALCULATE_NET_PROFIT_MARGIN = "portfolio.calculate_net_profit_margin"
 
 
 APPROVED_TOOL_NAMES: frozenset[str] = frozenset(item.value for item in ApprovedToolName)
@@ -36,6 +40,9 @@ class GatewayReasonCode(StrEnum):
     TOOL_TIMEOUT = "TOOL_TIMEOUT"
     TOOL_TRANSIENT_FAILURE = "TOOL_TRANSIENT_FAILURE"
     TOOL_FAILED_SAFE = "TOOL_FAILED_SAFE"
+    CALCULATION_INPUTS_MISSING = "CALCULATION_INPUTS_MISSING"
+    CALCULATION_INPUTS_INVALID = "CALCULATION_INPUTS_INVALID"
+    CALCULATION_DIVISION_BY_ZERO = "CALCULATION_DIVISION_BY_ZERO"
 
 
 class SearchAuthorizedDocumentsInput(StrictGatewayModel):
@@ -56,8 +63,24 @@ class GetDocumentExcerptInput(StrictGatewayModel):
     chunk_id: UUID
 
 
+class CalculateFinancialMetricInput(StrictGatewayModel):
+    company_slug: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    )
+    reporting_period: str = Field(pattern=r"^FY[0-9]{4}$")
+
+
 class PermittedToolInputField(StrictGatewayModel):
-    name: Literal["query", "top_k", "document_id", "chunk_id"]
+    name: Literal[
+        "query",
+        "top_k",
+        "document_id",
+        "chunk_id",
+        "company_slug",
+        "reporting_period",
+    ]
     value_type: Literal["string", "integer"]
     required: bool
     minimum: int | None = None
@@ -149,6 +172,10 @@ class ToolPayload(StrictGatewayModel):
     evidence: Annotated[tuple[ToolEvidence, ...], Field(max_length=MAX_TOP_K)]
 
 
+class CalculationPayload(StrictGatewayModel):
+    calculations: Annotated[tuple[CalculationResult, ...], Field(min_length=1, max_length=1)]
+
+
 class StructuredToolObservation(StrictGatewayModel):
     """Typed gateway result. Only successful results may carry authorized evidence content."""
 
@@ -161,6 +188,15 @@ class StructuredToolObservation(StrictGatewayModel):
     retry_count: Annotated[int, Field(ge=0, le=1)] = 0
     duration_ms: Annotated[int, Field(ge=0)] = 0
     evidence: tuple[ToolEvidence, ...] = ()
+    calculations: tuple[CalculationResult, ...] = ()
+
+    @model_validator(mode="after")
+    def enforce_payload_shape(self) -> StructuredToolObservation:
+        if self.status != "completed" and (self.evidence or self.calculations):
+            raise ValueError("Failed tool observations cannot carry payload content")
+        if self.evidence and self.calculations:
+            raise ValueError("A tool observation has exactly one payload kind")
+        return self
 
 
 class SanitizedToolTrace(StrictGatewayModel):

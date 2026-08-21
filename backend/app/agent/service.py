@@ -192,6 +192,7 @@ class AgentRunService:
             claims=outcome.claims,
             citations=outcome.citations,
             limitations=outcome.limitations,
+            calculations=outcome.calculations,
             step_count=outcome.step_count,
             replan_count=outcome.replan_count,
             retry_count=outcome.retry_count,

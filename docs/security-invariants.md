@@ -1,4 +1,4 @@
-# Step 8 + Interview Features Security Invariants
+# Step 9 + Interview Features Security Invariants
 
 These rules apply now and must remain true as later milestones are approved.
 
@@ -196,10 +196,9 @@ These rules apply now and must remain true as later milestones are approved.
 72. **MCP reauthorization.** Tool hiding is defense in depth. Every call rechecks the exact static
     name, shortlist, capability, strict input schema, and adapter database authorization before
     content is returned. Missing and unauthorized excerpt IDs are indistinguishable.
-73. **Static owned tools.** Only `portfolio.search_authorized_documents` and
-    `portfolio.get_document_excerpt` exist. Application startup fails on duplicate/missing names,
-    namespace, schema, or capability drift. No unrestricted runtime tool installation/discovery is
-    present.
+73. **Static owned tools.** Only two document tools and three named fixed calculator tools exist.
+    Application startup fails on duplicate/missing names, namespace, schema, or capability drift.
+    No unrestricted runtime tool installation/discovery is present.
 74. **Strict protocol boundaries.** Raw action JSON is validated before MCP SDK conversion, and MCP
     structured output is validated again locally. Coercible strings, forged scope keys, malformed
     input/output, corrupt provenance, oversized excerpts/results, and unknown fields fail closed.
@@ -218,7 +217,7 @@ These rules apply now and must remain true as later milestones are approved.
     host validator requires every claim ID to exist in authorized observation evidence and rebuilds
     exact document/version/chunk and source provenance.
 80. **Host-issued trace projection.** Public trace values are limited to UUID event IDs, fixed
-    stages/statuses, two approved tool names, `ev_N` evidence IDs, bounded durations/counters, and
+    stages/statuses, five approved tool names, `ev_N` evidence IDs, bounded durations/counters, and
     explicit reason/stopping allowlists. Model reason codes, query, prompts, plan, arguments, scope,
     evidence text, answers, paths, errors, secrets, and reasoning are excluded.
 81. **No new persistence surface.** The detailed Step 8 timeline is response-only. Existing messages
@@ -234,8 +233,8 @@ These rules apply now and must remain true as later milestones are approved.
 84. **Host-owned plan progression.** Initial plans use version 1; changed plans increment exactly one;
     completed history is immutable; the next action matches the first pending step; completed actions
     cannot replay; and host comparison, not the model flag, consumes the one-replan budget.
-85. **No later capabilities.** Steps 7 and 8 have no financial calculation tool, memory, sandbox,
-    arbitrary execution, remote/dynamic MCP, multi-agent design, cloud deployment, or Step 9 behavior.
+85. **Historical step isolation.** Steps 7 and 8 remain independently testable; later memory and
+    calculator features do not weaken their document authorization, bounds, or citation gates.
 86. **Routing is deterministic backend policy.** Models and clients cannot select a route or change
     authorization. Routing inputs are host-owned workload/evidence signals only.
 87. **Authorization precedes routing.** Only rows admitted by current repository authorization may
@@ -269,6 +268,21 @@ These rules apply now and must remain true as later milestones are approved.
     original creator; missing, foreign, and unauthorized IDs share a safe 404.
 97. **Memory logs are content-free.** Audit records contain action, outcome, user/workspace/memory
     IDs, scope, and result count only. Memory text and search queries never enter request/audit logs.
+98. **No model arithmetic inputs.** Calculator requests accept only company slug and reporting
+    period. Client/model numbers, formulas, units, ACLs, identities, and extra fields fail closed.
+99. **Every input is reauthorized.** Each invocation derives company and Finance access from current
+    database grants and admits cells only through materialized authorized chunks.
+100. **Literal approved cells only.** Required values come from one currently approved P&L XLSX;
+    formula-like, nonnumeric, unbounded, wrong-unit, missing, duplicate, or ambiguous inputs fail.
+101. **Host-owned fixed arithmetic.** `Decimal` host code owns formulas, denominator checks,
+    rounding, and results. No LLM generates or validates authoritative arithmetic.
+102. **Input-level provenance.** Every accepted number carries exact current
+    document/version/chunk/sheet/row/cell provenance and a host-issued evidence ID.
+103. **Deterministic finalization.** Successful calculation responses are built by host code and do
+    not pass through model finalization. Claims and calculation references cite the same authorized
+    input evidence set.
+104. **Calculator failures are content-free.** Missing, invalid, unauthorized, and division-by-zero
+    paths return allow-listed reason codes with no calculations, evidence, raw values, SQL, or errors.
 
 Automated tests cover password/token primitives, exact seeded scopes, policy reason codes, generic
 login errors, forged fields, malformed/expired/wrong-issuer/wrong-audience/wrong-signature tokens,

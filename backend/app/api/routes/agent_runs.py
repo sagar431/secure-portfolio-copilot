@@ -14,7 +14,13 @@ from app.chat.factory import create_agent_finalizer
 from app.core.config import Settings, get_settings
 from app.db.session import get_db_session
 from app.embeddings.factory import create_embedding_provider
-from app.mcp_gateway.adapters import GetDocumentExcerptAdapter, SearchAuthorizedDocumentsAdapter
+from app.mcp_gateway.adapters import (
+    CalculateEbitdaMarginAdapter,
+    CalculateNetProfitMarginAdapter,
+    CalculateRevenueGrowthAdapter,
+    GetDocumentExcerptAdapter,
+    SearchAuthorizedDocumentsAdapter,
+)
 from app.mcp_gateway.gateway import ApprovedToolAdapter, ApprovedToolGateway
 from app.schemas.api import SuccessResponse
 from app.schemas.chat import AgentRunMessageData, CreateMessageRequest
@@ -34,6 +40,9 @@ def get_agent_run_service(
                 SearchAuthorizedDocumentsAdapter(session, embedding_provider),
             ),
             cast(ApprovedToolAdapter, GetDocumentExcerptAdapter(session)),
+            cast(ApprovedToolAdapter, CalculateEbitdaMarginAdapter(session)),
+            cast(ApprovedToolAdapter, CalculateRevenueGrowthAdapter(session)),
+            cast(ApprovedToolAdapter, CalculateNetProfitMarginAdapter(session)),
         ),
         timeout_seconds=settings.agent_tool_timeout_seconds,
         max_transient_retries=settings.agent_tool_max_transient_retries,

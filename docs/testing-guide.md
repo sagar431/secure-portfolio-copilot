@@ -1,4 +1,4 @@
-# Step 8 Testing Guide
+# Step 9 + Interview Features Testing Guide
 
 Run commands from the locations shown. Tests use only synthetic identities and an isolated tmpfs
 PostgreSQL test service. On 2026-08-21 these commands passed with 263 backend tests and 88
@@ -41,6 +41,28 @@ and tenants; rejection of forged ACL/owner fields and source widening; expiry, s
 source-revocation behavior; authorization before full-text ranking; prompt-injection containment;
 metadata-only logging; strict client parsing; and inspector/delete behavior. Validate migration
 `0008` with `0006 -> 0008 -> 0007 -> 0008` plus `uv run alembic check`.
+
+## Focused deterministic calculator checks
+
+```bash
+cd backend
+uv run pytest -q \
+  tests/unit/calculations \
+  tests/unit/mcp_gateway \
+  tests/unit/agent_loop \
+  tests/security/test_agent_security.py \
+  tests/integration/test_deterministic_calculations.py \
+  tests/integration/test_agent_runs.py
+
+cd ../frontend
+npm test -- --run src/api/chat.test.ts src/pages/ChatPage.test.tsx
+```
+
+These checks prove exact EBITDA margin, revenue growth, and net profit margin results; fixed
+formulas; input units and cell citations; host-only arithmetic/finalization; current Finance/company
+reauthorization; and fail-closed missing, malformed, zero-denominator, unauthorized, ambiguous, and
+model-forged numeric/scope cases. Calculators need no migration because inputs remain governed
+parsed cells and results are response-only.
 
 ## Backend quality checks
 
@@ -110,6 +132,8 @@ Step 8 frontend coverage adds the explicit agent submit mode, bounded loading/ca
 agent envelope/terminal invariants, completed-only citation graphs, sanitized timeline rendering,
 evidence drawer links, and rejection of extra sensitive keys, non-UUID event IDs, non-`ev_N`
 references, non-approved action names, and non-allow-listed reason/stopping codes.
+Step 9 coverage adds strict calculation envelopes, formulas, trusted inputs/units, calculation-to-
+citation graph validation, accessible breakdown cards, exact results, and evidence-drawer links.
 
 ## Focused Step 6 checks
 

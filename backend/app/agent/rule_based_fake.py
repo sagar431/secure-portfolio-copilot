@@ -1,3 +1,5 @@
+import re
+
 from app.agent.models import (
     Action,
     ActionType,
@@ -16,9 +18,18 @@ from app.agent.models import (
     Step,
     StructuredObservation,
 )
-from app.mcp_gateway.contracts import PermittedToolDescriptor, SearchAuthorizedDocumentsInput
+from app.mcp_gateway.contracts import (
+    CalculateFinancialMetricInput,
+    PermittedToolDescriptor,
+    SearchAuthorizedDocumentsInput,
+)
 
 SEARCH_TOOL = "portfolio.search_authorized_documents"
+CALCULATOR_BY_PHRASE = {
+    "ebitda margin": "portfolio.calculate_ebitda_margin",
+    "revenue growth": "portfolio.calculate_revenue_growth",
+    "net profit margin": "portfolio.calculate_net_profit_margin",
+}
 
 
 class RuleBasedFakeAgentProvider:
@@ -93,7 +104,42 @@ class RuleBasedFakeAgentProvider:
         permitted_tool_catalog: tuple[PermittedToolDescriptor, ...],
     ) -> DecisionResult:
         del perception
-        if SEARCH_TOOL not in {item.name.value for item in permitted_tool_catalog}:
+        permitted = {item.name.value for item in permitted_tool_catalog}
+        normalized = query.casefold()
+        calculator = next(
+            (tool for phrase, tool in CALCULATOR_BY_PHRASE.items() if phrase in normalized),
+            None,
+        )
+        if calculator is not None and calculator in permitted:
+            period_match = re.search(r"\bfy(\d{4})\b", normalized)
+            period = f"FY{period_match.group(1)}" if period_match else "FY2025"
+            company_slug = "atlas-main" if "atlas" in normalized else "orion-main"
+            action = Action(
+                type=ActionType.TOOL_CALL,
+                action_name=calculator,
+                arguments=CalculateFinancialMetricInput(
+                    company_slug=company_slug,
+                    reporting_period=period,
+                ),
+                reason_code="CALCULATE_AUTHORIZED_METRIC",
+            )
+            return DecisionResult(
+                plan=Plan(
+                    version=1,
+                    plan_text=("Calculate from reauthorized structured inputs.",),
+                    steps=(
+                        Step(
+                            step_index=0,
+                            action_type=action.type,
+                            action_name=action.action_name,
+                            reason_code=action.reason_code,
+                        ),
+                    ),
+                    change_reason_code="PLAN_CREATED",
+                ),
+                next_action=action,
+            )
+        if SEARCH_TOOL not in permitted:
             return self._terminal(ActionType.REFUSE, version=1)
         action = Action(
             type=ActionType.TOOL_CALL,

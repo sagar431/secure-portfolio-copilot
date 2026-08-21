@@ -3,6 +3,7 @@ import json
 from mcp import Client
 
 from app.agent.models import Action, ObservationStatus, StructuredObservation
+from app.calculations.contracts import CalculationCitation
 from app.chat.contracts import GroundedEvidence
 from app.mcp_gateway.contracts import (
     ApprovedToolName,
@@ -39,6 +40,24 @@ class AgentGatewayAdapter:
             row_end=item.location.row_end,
             cell_start=item.location.cell_start,
             cell_end=item.location.cell_end,
+        )
+
+    def _calculation_evidence(self, item: CalculationCitation) -> GroundedEvidence:
+        self._evidence_sequence += 1
+        return GroundedEvidence(
+            evidence_id=f"ev_{self._evidence_sequence}",
+            chunk_id=item.chunk_id,
+            document_id=item.document_id,
+            document_version_id=item.document_version_id,
+            version_number=item.version_number,
+            document_title=item.document_title,
+            excerpt=item.excerpt,
+            page_number=None,
+            sheet_name=item.sheet_name,
+            row_start=item.row_start,
+            row_end=item.row_end,
+            cell_start=item.cell_start,
+            cell_end=item.cell_end,
         )
 
     async def execute(
@@ -98,12 +117,21 @@ class AgentGatewayAdapter:
             status = ObservationStatus.TIMEOUT
         else:
             status = ObservationStatus.ERROR
+        calculation_evidence = tuple(
+            self._calculation_evidence(item.citation)
+            for calculation in result.calculations
+            for item in calculation.trusted_inputs
+        )
         return StructuredObservation(
             tool_name=result.tool_name.value
             if result.tool_name is not None
             else action.action_name or "portfolio.invalid",
             status=status,
-            evidence=tuple(self._evidence(item) for item in result.evidence),
+            evidence=(
+                *(self._evidence(item) for item in result.evidence),
+                *calculation_evidence,
+            ),
+            calculations=result.calculations,
             duration_ms=result.duration_ms,
             retryable=False,
             retry_count=result.retry_count,

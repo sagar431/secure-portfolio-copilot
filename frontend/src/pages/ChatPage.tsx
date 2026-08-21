@@ -9,6 +9,7 @@ import {
 } from '../api/chat'
 import { useAuth } from '../auth/useAuth'
 import { AgentTraceTimeline } from '../components/AgentTraceTimeline'
+import { CalculationCard } from '../components/CalculationCard'
 import { EvidenceDrawer } from '../components/EvidenceDrawer'
 import { GroundedAnswer } from '../components/GroundedAnswer'
 import type {
@@ -424,6 +425,16 @@ export function ChatPage() {
                     }
                     onOpenEvidence={setOpenCitation}
                   />
+                  {turn.kind === 'agent'
+                    ? turn.response.calculations.map((calculation) => (
+                        <CalculationCard
+                          key={calculation.calculation_id}
+                          calculation={calculation}
+                          citations={turn.response.citations}
+                          onOpenEvidence={setOpenCitation}
+                        />
+                      ))
+                    : null}
                   {turn.kind === 'agent' ? (
                     <AgentTraceTimeline
                       run={turn.response}

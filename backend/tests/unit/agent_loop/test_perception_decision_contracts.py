@@ -48,6 +48,9 @@ from app.policies.models import (
 
 SEARCH = "portfolio.search_authorized_documents"
 EXCERPT = "portfolio.get_document_excerpt"
+EBITDA = "portfolio.calculate_ebitda_margin"
+GROWTH = "portfolio.calculate_revenue_growth"
+NET_PROFIT = "portfolio.calculate_net_profit_margin"
 
 
 def _scope() -> AuthorizationScope:
@@ -213,7 +216,13 @@ def test_decision_receives_exact_sanitized_manifest_catalog() -> None:
     decoded = json.loads(initial_decision_prompt("Synthetic question", _perception(), catalog))
     descriptors = decoded["permitted_tool_catalog"]
 
-    assert [item["name"] for item in descriptors] == [SEARCH, EXCERPT]
+    assert [item["name"] for item in descriptors] == [
+        SEARCH,
+        EXCERPT,
+        EBITDA,
+        GROWTH,
+        NET_PROFIT,
+    ]
     assert [field["name"] for field in descriptors[0]["input_schema"]["fields"]] == [
         "query",
         "top_k",
@@ -222,6 +231,11 @@ def test_decision_receives_exact_sanitized_manifest_catalog() -> None:
         "document_id",
         "chunk_id",
     ]
+    for descriptor in descriptors[2:]:
+        assert [field["name"] for field in descriptor["input_schema"]["fields"]] == [
+            "company_slug",
+            "reporting_period",
+        ]
     serialized = json.dumps(descriptors)
     for forbidden in ("tenant", "user_id", "role", "department", "sql", "path", "api_key"):
         assert forbidden not in serialized.casefold()

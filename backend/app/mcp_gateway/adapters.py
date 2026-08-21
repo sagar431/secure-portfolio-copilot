@@ -3,11 +3,20 @@ from __future__ import annotations
 from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.calculations.contracts import CalculationMetric
+from app.calculations.engine import CalculationError
+from app.calculations.repository import (
+    CalculationAuthorizationError,
+    calculate_authorized_metric,
+)
 from app.core.errors import APIError
 from app.embeddings.contracts import EmbeddingProvider
 from app.mcp_gateway.contracts import (
     ApprovedToolName,
+    CalculateFinancialMetricInput,
+    CalculationPayload,
     EvidenceLocation,
+    GatewayReasonCode,
     GetDocumentExcerptInput,
     SearchAuthorizedDocumentsInput,
     ToolEvidence,
@@ -15,6 +24,7 @@ from app.mcp_gateway.contracts import (
 )
 from app.mcp_gateway.errors import (
     GatewayConfigurationError,
+    ToolAdapterError,
     ToolAuthorizationError,
     ToolTransientError,
 )
@@ -29,7 +39,13 @@ from app.retrieval.service import AuthorizedSearchService
 
 def validate_production_tool_catalog() -> None:
     """Fail application startup if the static production catalog drifts."""
-    adapter_types = (SearchAuthorizedDocumentsAdapter, GetDocumentExcerptAdapter)
+    adapter_types = (
+        SearchAuthorizedDocumentsAdapter,
+        GetDocumentExcerptAdapter,
+        CalculateEbitdaMarginAdapter,
+        CalculateRevenueGrowthAdapter,
+        CalculateNetProfitMarginAdapter,
+    )
     seen: set[ApprovedToolName] = set()
     for adapter_type in adapter_types:
         name = adapter_type.name
@@ -180,3 +196,53 @@ class GetDocumentExcerptAdapter:
                 ),
             )
         )
+
+
+class _CalculateFinancialMetricAdapter:
+    input_model = CalculateFinancialMetricInput
+    output_model = CalculationPayload
+    required_capability = Capability.QUERY_DOCUMENTS
+    metric: CalculationMetric
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def invoke(
+        self,
+        *,
+        arguments: object,
+        authorization_scope: AuthorizationScope,
+        request_id: str,
+    ) -> object:
+        del request_id
+        if not isinstance(arguments, CalculateFinancialMetricInput):
+            raise TypeError("Gateway input contract mismatch")
+        _require_query_capability(authorization_scope)
+        try:
+            result = await calculate_authorized_metric(
+                self._session,
+                authorization_scope,
+                metric=self.metric,
+                company_slug=arguments.company_slug,
+                period=arguments.reporting_period,
+            )
+        except CalculationAuthorizationError:
+            raise ToolAuthorizationError from None
+        except CalculationError as exc:
+            raise ToolAdapterError(GatewayReasonCode(exc.code.value)) from None
+        return CalculationPayload(calculations=(result,))
+
+
+class CalculateEbitdaMarginAdapter(_CalculateFinancialMetricAdapter):
+    name = ApprovedToolName.CALCULATE_EBITDA_MARGIN
+    metric = CalculationMetric.EBITDA_MARGIN
+
+
+class CalculateRevenueGrowthAdapter(_CalculateFinancialMetricAdapter):
+    name = ApprovedToolName.CALCULATE_REVENUE_GROWTH
+    metric = CalculationMetric.REVENUE_GROWTH
+
+
+class CalculateNetProfitMarginAdapter(_CalculateFinancialMetricAdapter):
+    name = ApprovedToolName.CALCULATE_NET_PROFIT_MARGIN
+    metric = CalculationMetric.NET_PROFIT_MARGIN

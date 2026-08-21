@@ -6,14 +6,16 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.calculations.contracts import CalculationResult
 from app.chat.contracts import GroundedEvidence
 from app.mcp_gateway.contracts import (
+    CalculateFinancialMetricInput,
     GetDocumentExcerptInput,
     PermittedToolDescriptor,
     SearchAuthorizedDocumentsInput,
 )
 from app.policies.models import AuthorizationContext
-from app.schemas.chat import GroundedCitationData, GroundedClaimData
+from app.schemas.chat import CalculationData, GroundedCitationData, GroundedClaimData
 
 
 class StrictModel(BaseModel):
@@ -194,7 +196,12 @@ class NoActionArguments(StrictModel):
     pass
 
 
-ActionArguments = SearchAuthorizedDocumentsInput | GetDocumentExcerptInput | NoActionArguments
+ActionArguments = (
+    SearchAuthorizedDocumentsInput
+    | GetDocumentExcerptInput
+    | CalculateFinancialMetricInput
+    | NoActionArguments
+)
 
 
 class Action(StrictModel):
@@ -216,6 +223,12 @@ class Action(StrictModel):
                 self.arguments, GetDocumentExcerptInput
             ):
                 raise ValueError("Excerpt actions require the exact excerpt input schema")
+            if self.action_name in {
+                "portfolio.calculate_ebitda_margin",
+                "portfolio.calculate_revenue_growth",
+                "portfolio.calculate_net_profit_margin",
+            } and not isinstance(self.arguments, CalculateFinancialMetricInput):
+                raise ValueError("Calculation actions require the exact calculation input schema")
         elif self.action_name is not None or not isinstance(self.arguments, NoActionArguments):
             raise ValueError("Non-tool actions cannot carry a tool name or arguments")
         return self
@@ -283,6 +296,7 @@ class StructuredObservation(StrictModel):
     tool_name: str = Field(pattern=r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
     status: ObservationStatus
     evidence: tuple[GroundedEvidence, ...] = ()
+    calculations: tuple[CalculationResult, ...] = Field(default=(), exclude=True)
     duration_ms: int = Field(ge=0)
     retryable: bool = False
     retry_count: int = Field(default=0, ge=0, le=1)
@@ -290,8 +304,8 @@ class StructuredObservation(StrictModel):
 
     @model_validator(mode="after")
     def enforce_failure_shape(self) -> StructuredObservation:
-        if self.status != ObservationStatus.SUCCESS and self.evidence:
-            raise ValueError("Failed observations cannot expose evidence")
+        if self.status != ObservationStatus.SUCCESS and (self.evidence or self.calculations):
+            raise ValueError("Failed observations cannot expose evidence or calculations")
         if self.status == ObservationStatus.DENIED and self.retryable:
             raise ValueError("Authorization denials cannot be retried")
         return self
@@ -327,6 +341,7 @@ class AgentRunOutcome(StrictModel):
     claims: tuple[GroundedClaimData, ...] = ()
     citations: tuple[GroundedCitationData, ...] = ()
     limitations: tuple[str, ...] = ()
+    calculations: tuple[CalculationData, ...] = ()
     step_count: int = Field(ge=0)
     replan_count: int = Field(ge=0)
     retry_count: int = Field(ge=0)

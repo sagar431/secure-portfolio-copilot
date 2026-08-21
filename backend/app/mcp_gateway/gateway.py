@@ -13,6 +13,8 @@ from pydantic import BaseModel, ValidationError
 from app.mcp_gateway.contracts import (
     APPROVED_TOOL_NAMES,
     ApprovedToolName,
+    CalculateFinancialMetricInput,
+    CalculationPayload,
     GatewayReasonCode,
     GetDocumentExcerptInput,
     PermittedToolDescriptor,
@@ -77,6 +79,27 @@ TOOL_MANIFEST: Mapping[ApprovedToolName, ToolManifestEntry] = {
         safe_result_description=(
             "One authorized evidence excerpt with host-owned source provenance."
         ),
+    ),
+    ApprovedToolName.CALCULATE_EBITDA_MARGIN: ToolManifestEntry(
+        input_model=CalculateFinancialMetricInput,
+        output_model=CalculationPayload,
+        required_capability=Capability.QUERY_DOCUMENTS,
+        purpose="Calculate EBITDA margin from authorized structured financial inputs.",
+        safe_result_description="Formula, trusted inputs, percent result, and source citations.",
+    ),
+    ApprovedToolName.CALCULATE_REVENUE_GROWTH: ToolManifestEntry(
+        input_model=CalculateFinancialMetricInput,
+        output_model=CalculationPayload,
+        required_capability=Capability.QUERY_DOCUMENTS,
+        purpose="Calculate period-over-period revenue growth from authorized structured inputs.",
+        safe_result_description="Formula, trusted inputs, percent result, and source citations.",
+    ),
+    ApprovedToolName.CALCULATE_NET_PROFIT_MARGIN: ToolManifestEntry(
+        input_model=CalculateFinancialMetricInput,
+        output_model=CalculationPayload,
+        required_capability=Capability.QUERY_DOCUMENTS,
+        purpose="Calculate net profit margin from authorized structured financial inputs.",
+        safe_result_description="Formula, trusted inputs, percent result, and source citations.",
     ),
 }
 
@@ -158,6 +181,8 @@ class ApprovedToolGateway:
                     "top_k",
                     "document_id",
                     "chunk_id",
+                    "company_slug",
+                    "reporting_period",
                 } or value_type not in {
                     "string",
                     "integer",
@@ -193,7 +218,7 @@ class ApprovedToolGateway:
         status: Literal["completed", "denied", "failed"],
         reason_code: GatewayReasonCode,
         retry_count: int = 0,
-        payload: ToolPayload | None = None,
+        payload: ToolPayload | CalculationPayload | None = None,
     ) -> StructuredToolObservation:
         duration_ms = max(0, int((time.perf_counter() - started_at) * 1000))
         return StructuredToolObservation(
@@ -203,7 +228,8 @@ class ApprovedToolGateway:
             reason_code=reason_code,
             retry_count=retry_count,
             duration_ms=duration_ms,
-            evidence=payload.evidence if payload is not None else (),
+            evidence=payload.evidence if isinstance(payload, ToolPayload) else (),
+            calculations=(payload.calculations if isinstance(payload, CalculationPayload) else ()),
         )
 
     async def execute(
@@ -293,7 +319,7 @@ class ApprovedToolGateway:
                         reason_code=GatewayReasonCode.OUTPUT_SCHEMA_REJECTED,
                         retry_count=retry_count,
                     )
-                if not isinstance(payload, ToolPayload):
+                if not isinstance(payload, (ToolPayload, CalculationPayload)):
                     return self._observation(
                         started_at=started_at,
                         tool_name=approved_name,

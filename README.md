@@ -1,15 +1,16 @@
 # Secure Portfolio Copilot
 
-A security-first portfolio analysis copilot, complete through Playbook Step 8 plus deterministic
+A security-first portfolio analysis copilot, complete through Playbook Step 9 plus deterministic
 dual-model routing and source-inheriting scoped memory. In addition to
 database-revalidated identity, governed PDF/XLSX/CSV ingestion, and authorization-first hybrid
 retrieval, it provides both the Step 6 non-agentic grounded chat and a bounded single-agent path.
-The agent separates Perception and Decision, invokes only two approved document tools through an
+The agent separates Perception and Decision, invokes five approved document/calculator tools through an
 embedded MCP gateway with host-injected authorization, and preserves Step 6 citation validation.
 Simple authorized grounded requests use Mac Ollama `qwen3:8b`; complex, multi-document,
 low-confidence, and agentic work uses Runpod `kimi-k3`. Private-user, Finance, Legal, and Shared
-memory is filtered and source-reauthorized before retrieval. The project contains no calculation
-engine, arbitrary execution, multi-agent system, or cloud deployment yet.
+memory is filtered and source-reauthorized before retrieval. Three fixed financial metrics are
+computed from reauthorized spreadsheet cells by host code. The project contains no arbitrary
+execution, multi-agent system, or cloud deployment.
 
 ## Prerequisites
 
@@ -192,9 +193,9 @@ npm run build
 The current Step 8 correction passes 263 backend tests and the previously verified 88 frontend
 Vitest tests, plus backend format/lint/strict-type gates. Live Runpod Kimi initial/step-result
 Perception, initial/mid-session Decision, and grounded final-answer contracts pass against
-`kimi-k3`; the final answer contained one host-validatable cited claim with no retry. Step 9 has not
-started. See the testing guide for focused fake-provider, MCP/agent, redaction, migration-cycle, and
-live provider checks.
+`kimi-k3`; the final answer contained one host-validatable cited claim with no retry. See the
+testing guide for focused fake-provider, MCP/agent/calculator, redaction, migration-cycle, and live
+provider checks.
 
 Database and migrations:
 
@@ -391,6 +392,20 @@ bounded to five newest items, labeled untrusted and non-evidentiary, and cannot 
 The `/memories` inspector renders only the server-filtered list, supports source-free private
 preferences, and exposes deletion only when the server says the current user may delete.
 
+## Deterministic financial calculations
+
+The bounded agent may select exactly one of
+`portfolio.calculate_ebitda_margin`, `portfolio.calculate_revenue_growth`, or
+`portfolio.calculate_net_profit_margin`. Tool input contains only `company_slug` and
+`reporting_period`; model-supplied numbers, formulas, scope, and ownership fields are rejected.
+Each invocation reauthorizes the target company and Finance access, starts from materialized
+authorized chunks, and reads only literal numeric cells from one currently approved P&L workbook.
+
+Host `Decimal` arithmetic returns the fixed formula, trusted inputs, units, percentage result, and
+one exact cell citation per input. Formula-like cells, invalid units, ambiguous workbooks, missing
+metrics, and zero denominators fail closed. Successful calculation finalization is deterministic,
+so no model calculates or copies the result. The UI renders a strict calculation breakdown card.
+
 ## Steps 7 and 8: MCP gateway and bounded agent workflow
 
 `POST /api/conversations/{conversation_id}/agent-runs` preserves the same owner and capability
@@ -409,7 +424,7 @@ the model—executes it. Provider JSON schemas derive from the strict Pydantic c
 response is strictly validated locally.
 
 The embedded official MCP client/server advertises only the request's capability-filtered subset of
-`portfolio.search_authorized_documents` and `portfolio.get_document_excerpt`. The host validates
+the two document tools and three fixed calculator tools. The host validates
 raw action JSON before MCP conversion, injects the immutable database-backed scope outside model
 arguments, and revalidates it inside each adapter. Startup fails on duplicate names or schema/
 capability drift. Unknown tools, forged authorization fields, malformed data, unauthorized IDs,
@@ -423,7 +438,7 @@ per-tool timeout, and 90 seconds total by default. Every path ends as `completed
 answer is accepted only after the Step 6 host citation validator reconstructs all cited provenance.
 
 The `/chat` page keeps **Ask copilot** as the Step 6 default and adds **Run bounded agent**. Agent
-turns show a sanitized responsive timeline. Only host UUID event IDs, stage/status, the two approved
+turns show a sanitized responsive timeline. Only host UUID event IDs, stage/status, the five approved
 tool names, `ev_N` evidence references, durations, counters, and allow-listed reason/stopping codes
 are accepted. Prompts, queries, plan text, raw observations, evidence content, scope, paths,
 exceptions, secrets, and model reasoning are neither stored nor rendered in that trace.
@@ -446,6 +461,6 @@ the host MCP gateway. Logs/traces exclude questions, prompts, excerpts, answers,
 keys, and hidden reasoning; conversation `messages` intentionally persist the user's question and
 the controlled assistant answer.
 
-Broad semantic entailment/numeric validation, reranking, message-history loading, trace persistence,
-automated retention jobs, calculations, arbitrary code, remote/dynamic MCP, production embedding
+Broad semantic entailment, reranking, message-history loading, trace persistence,
+automated retention jobs, arbitrary code, remote/dynamic MCP, production embedding
 infrastructure, and AWS remain absent.

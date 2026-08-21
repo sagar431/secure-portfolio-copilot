@@ -93,6 +93,29 @@ export interface AgentTraceEventData {
   reason_code: string | null
 }
 
+export type CalculationMetric =
+  'ebitda_margin' | 'revenue_growth' | 'net_profit_margin'
+
+export interface CalculationInputData {
+  name: string
+  period: string
+  value: number
+  unit: 'INR crore'
+  citation_id: string
+}
+
+export interface CalculationData {
+  calculation_id: string
+  metric: CalculationMetric
+  company_slug: string
+  period: string
+  formula: string
+  trusted_inputs: CalculationInputData[]
+  result: number
+  unit: 'percent'
+  citation_ids: string[]
+}
+
 export interface AgentRunData {
   conversation_id: string
   user_message_id: string
@@ -104,6 +127,7 @@ export interface AgentRunData {
   claims: GroundedClaimData[]
   citations: GroundedCitationData[]
   limitations: string[]
+  calculations: CalculationData[]
   step_count: number
   replan_count: number
   retry_count: number

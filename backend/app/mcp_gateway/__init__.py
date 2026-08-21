@@ -1,4 +1,7 @@
 from app.mcp_gateway.adapters import (
+    CalculateEbitdaMarginAdapter,
+    CalculateNetProfitMarginAdapter,
+    CalculateRevenueGrowthAdapter,
     GetDocumentExcerptAdapter,
     SearchAuthorizedDocumentsAdapter,
 )
@@ -15,6 +18,9 @@ __all__ = [
     "APPROVED_TOOL_NAMES",
     "ApprovedToolGateway",
     "ApprovedToolName",
+    "CalculateEbitdaMarginAdapter",
+    "CalculateNetProfitMarginAdapter",
+    "CalculateRevenueGrowthAdapter",
     "GetDocumentExcerptAdapter",
     "SanitizedToolTrace",
     "SearchAuthorizedDocumentsAdapter",

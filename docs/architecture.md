@@ -1,4 +1,4 @@
-# Step 8 + Router + Scoped Memory Architecture
+# Step 9 + Interview Features Architecture
 
 ## Scope
 
@@ -6,9 +6,8 @@ This document describes the Step 1 foundation, Step 2 identity/authorization, St
 synthetic-document ingestion, Step 4 secure chunk storage, Step 5 approved-version embeddings and
 authorization-first hybrid retrieval, Step 6 non-agentic grounded chat, Step 7's embedded approved
 MCP gateway, Step 8's Perception, Decision, and bounded AgentLoop, the deterministic Qwen/Kimi
-router, and source-inheriting scoped memory. Calculations,
-arbitrary execution, remote/dynamic MCP, multi-agent coordination, and deployment remain outside
-this scope.
+router, source-inheriting scoped memory, and Step 9's deterministic fixed calculators. Arbitrary
+execution, remote/dynamic MCP, multi-agent coordination, and deployment remain outside this scope.
 
 ```mermaid
 flowchart LR
@@ -59,6 +58,9 @@ flowchart LR
     MCPServer --> Gateway[ApprovedToolGateway]
     Gateway --> DocTools[Authorized search or excerpt]
     DocTools --> Observation[Strict structured observation]
+    Gateway --> Calculators[Three fixed financial calculators]
+    Calculators -->|authorized literal spreadsheet cells| Chunks
+    Calculators --> Observation
     Observation --> Perception
     Decision -->|FINALIZE| CitationValidator
     Identity --> SQLAlchemy[SQLAlchemy async engine]
@@ -388,6 +390,26 @@ absence of any currently unauthorized source. Full-text ranking occurs only afte
 The inspector uses the same set. Memory audit events contain IDs, action, outcome, scope, and count,
 never content or search text.
 
+## Deterministic calculator path
+
+The three calculator contracts are fixed to EBITDA margin, revenue growth, and net profit margin.
+The model may provide only a company slug and `FYyyyy` reporting period. Raw MCP validation rejects
+numeric inputs, formulas, tenant/user/department fields, and every extra key before adapter code
+runs.
+
+Each invocation derives eligible company IDs and Finance access from the current immutable scope,
+then materializes the authorized-chunk lifecycle/ACL statement. Only one currently authorized P&L
+XLSX version is accepted. Parsed headers identify periods and metrics; every required value must be
+a bounded literal numeric cell with unit `INR crore`, covered by exactly one authorized chunk.
+Missing, malformed, formula-like, ambiguous, unauthorized, and zero-denominator cases return typed
+content-free failures.
+
+Host `Decimal` arithmetic evaluates the fixed formula. The result contains the formula, input name,
+period, value, unit, and exact document/version/chunk/sheet/row/cell provenance for every input.
+The agent assigns host `ev_N` IDs and constructs the claim and citations without asking a model to
+calculate or copy the result. No calculator migration is required: results are reproducible
+response data derived from current approved parsed cells.
+
 ## Bounded AgentLoop and MCP path
 
 The Session 10 reference was inspected read-only. Steps 7 and 8 retain its useful single-session state,
@@ -413,8 +435,8 @@ returns a policy/terminal trace without calling Perception, MCP, retrieval, or t
    plan step.
 4. `AgentGatewayAdapter` strictly validates raw JSON before the MCP SDK can coerce types. It creates
    a request-scoped official `Client(MCPServer)` whose closure owns scope, shortlist, and request ID.
-5. The server registers only the shortlisted subset of
-   `portfolio.search_authorized_documents` and `portfolio.get_document_excerpt`. The gateway again
+5. The server registers only the shortlisted subset of two document tools and three fixed
+   calculator tools. The gateway again
    checks name, shortlist, capability, input schema, timeout/retry, and output schema. Each adapter
    reuses the Step 5 authorization/lifecycle SQL; missing and unauthorized excerpt IDs are identical
    denials.
@@ -427,8 +449,9 @@ returns a policy/terminal trace without calling Perception, MCP, retrieval, or t
    steps. Host counters stop after four tools, the initial search plus one semantic rewrite, one
    replan, one transient retry per tool, or the total duration. Plan changes count as replans even if
    the model omits its replan flag. Authorization denial is never retried.
-8. `FINALIZE` calls the existing grounded provider and Step 6 validator. Only a completed run may
-   carry claims/citations, and every citation is reconstructed from authorized observation evidence.
+8. `FINALIZE` calls the grounded provider and Step 6 validator for document answers. A successful
+   fixed calculator instead uses a deterministic host finalizer. Only a completed run may carry
+   claims/citations, and every citation is reconstructed from authorized observation evidence.
 
 The gateway catalog is statically owned and application startup validates both adapter definitions
 against the manifest. Duplicate names, unknown namespaces, missing tools, and input/output schema or
@@ -437,7 +460,7 @@ uses the official in-process client, lists only one request-shortlisted tool, ca
 revalidates `structured_content`.
 
 The response trace is deliberately not the internal AgentSession. It projects only host UUID event
-IDs, stage/status, two exact approved action names, host `ev_N` references, duration, counters, and
+IDs, stage/status, five exact approved action names, host `ev_N` references, duration, counters, and
 allow-listed reason/stopping codes. Queries, prompts, perceptions, plan text, action arguments,
 observations, excerpts, scope, paths, raw errors, answers, secrets, and rationale are absent. Steps 7
 and 8 add no database table: messages and metadata-only request traces use migration `0006`; the detailed
@@ -492,5 +515,5 @@ call writes `READY` vectors and a count-only audit; provider failure rolls back 
   metadata-only records and must never copy question, prompt, evidence, answer, key, provider body,
   or hidden reasoning.
 - The small curated retrieval evaluation and one-case live provider smoke are not broad quality
-  benchmarks. No semantic entailment validator, numeric validator, message-history loading, MCP,
-  memory, calculation, planning, tool call, or agent loop exists yet.
+  benchmarks. Fixed calculators validate their arithmetic and provenance, but no broad semantic
+  entailment or arbitrary numeric-analysis engine exists.

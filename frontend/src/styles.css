@@ -826,6 +826,83 @@ textarea:disabled {
   margin: 0.3rem 0 0;
 }
 
+.calculation-card {
+  display: grid;
+  width: min(760px, 92%);
+  gap: 1.25rem;
+  padding: 1.25rem;
+  border: 1px solid #8ab9a6;
+  border-radius: 0.9rem;
+  background: #f7fbf8;
+  box-shadow: 0 12px 35px rgb(20 72 54 / 8%);
+}
+
+.calculation-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.calculation-card h3,
+.calculation-card h4,
+.calculation-card header p {
+  margin: 0;
+}
+
+.calculation-card header > strong {
+  color: #14523f;
+  font-size: 2rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.calculation-card section {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.calculation-card code {
+  padding: 0.85rem;
+  border-radius: 0.55rem;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  color: #23483c;
+  background: #e3f0e9;
+}
+
+.calculation-inputs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.calculation-inputs > div {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.8rem;
+  border-radius: 0.55rem;
+  background: #fff;
+}
+
+.calculation-inputs small {
+  color: #65746e;
+}
+
+.calculation-inputs button {
+  justify-self: start;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid #8ab9a6;
+  border-radius: 0.35rem;
+  color: #165d47;
+  background: #edf5f0;
+}
+
+.calculation-boundary {
+  margin: 0;
+  color: #52645c;
+  font-size: 0.85rem;
+}
+
 .upload-progress {
   display: grid;
   gap: 0.4rem;
@@ -1684,7 +1761,8 @@ td {
   .evaluation-summary--not-run,
   .agent-trace__summary,
   .agent-trace__event-details,
-  .memory-metadata {
+  .memory-metadata,
+  .calculation-inputs {
     grid-template-columns: 1fr;
   }
 
@@ -1736,7 +1814,8 @@ td {
 
   .question-card,
   .answer-card,
-  .agent-trace {
+  .agent-trace,
+  .calculation-card {
     width: 100%;
   }
 

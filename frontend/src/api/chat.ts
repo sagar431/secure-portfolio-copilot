@@ -2,6 +2,8 @@ import type { ApiSuccessEnvelope } from '../types/api'
 import type {
   AgentRunData,
   AgentTraceEventData,
+  CalculationData,
+  CalculationInputData,
   ConversationCreateData,
   ConversationData,
   ConversationListData,
@@ -47,6 +49,9 @@ const APPROVED_STOPPING_REASONS = new Set([
 const APPROVED_AGENT_ACTION_NAMES = new Set([
   'portfolio.search_authorized_documents',
   'portfolio.get_document_excerpt',
+  'portfolio.calculate_ebitda_margin',
+  'portfolio.calculate_revenue_growth',
+  'portfolio.calculate_net_profit_margin',
 ])
 const APPROVED_TRACE_REASON_CODES = new Set([
   'ACTION_VALIDATED',
@@ -54,11 +59,15 @@ const APPROVED_TRACE_REASON_CODES = new Set([
   'AUTHORIZATION_DENIED',
   'AUTHORIZATION_IDENTITY_MISMATCH',
   'CAPABILITY_SHORTLIST_BOUND',
+  'CALCULATION_DIVISION_BY_ZERO',
+  'CALCULATION_INPUTS_INVALID',
+  'CALCULATION_INPUTS_MISSING',
   'CITATION_VALIDATION_FAILED',
   'CITATIONS_VALIDATED',
   'CLARIFICATION_REQUIRED',
   'COMPLETED',
   'DECISION_PRODUCED',
+  'DETERMINISTIC_CALCULATION_VALIDATED',
   'DURATION',
   'FINALIZATION_STARTED',
   'INPUT_SCHEMA_REJECTED',
@@ -351,6 +360,70 @@ function isSafeCounter(value: unknown): value is number {
   )
 }
 
+function isCalculationInput(value: unknown): value is CalculationInputData {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ['name', 'period', 'value', 'unit', 'citation_id']) &&
+    isBoundedString(value.name, 80) &&
+    typeof value.period === 'string' &&
+    /^FY[0-9]{4}$/.test(value.period) &&
+    typeof value.value === 'number' &&
+    Number.isFinite(value.value) &&
+    Math.abs(value.value) <= 1_000_000_000_000 &&
+    value.unit === 'INR crore' &&
+    typeof value.citation_id === 'string' &&
+    AGENT_EVIDENCE_REFERENCE.test(value.citation_id)
+  )
+}
+
+function isCalculation(value: unknown): value is CalculationData {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      'calculation_id',
+      'metric',
+      'company_slug',
+      'period',
+      'formula',
+      'trusted_inputs',
+      'result',
+      'unit',
+      'citation_ids',
+    ]) ||
+    !isUuid(value.calculation_id) ||
+    !['ebitda_margin', 'revenue_growth', 'net_profit_margin'].includes(
+      String(value.metric),
+    ) ||
+    typeof value.company_slug !== 'string' ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.company_slug) ||
+    typeof value.period !== 'string' ||
+    !/^FY[0-9]{4}$/.test(value.period) ||
+    !isBoundedString(value.formula, 400) ||
+    !Array.isArray(value.trusted_inputs) ||
+    value.trusted_inputs.length < 2 ||
+    value.trusted_inputs.length > 6 ||
+    !value.trusted_inputs.every(isCalculationInput) ||
+    typeof value.result !== 'number' ||
+    !Number.isFinite(value.result) ||
+    Math.abs(value.result) > 1_000_000 ||
+    value.unit !== 'percent' ||
+    !Array.isArray(value.citation_ids) ||
+    !value.citation_ids.every(
+      (item) => typeof item === 'string' && AGENT_EVIDENCE_REFERENCE.test(item),
+    )
+  ) {
+    return false
+  }
+  const inputCitationIds = value.trusted_inputs.map(
+    (input) => input.citation_id,
+  )
+  return (
+    new Set(value.citation_ids).size === value.citation_ids.length &&
+    value.citation_ids.length === inputCitationIds.length &&
+    value.citation_ids.every((item, index) => item === inputCitationIds[index])
+  )
+}
+
 function isAgentTraceEvent(value: unknown): value is AgentTraceEventData {
   return (
     isRecord(value) &&
@@ -404,6 +477,7 @@ function isAgentRunData(value: unknown): value is AgentRunData {
       'claims',
       'citations',
       'limitations',
+      'calculations',
       'step_count',
       'replan_count',
       'retry_count',
@@ -426,6 +500,9 @@ function isAgentRunData(value: unknown): value is AgentRunData {
     !value.limitations.every((limitation) =>
       isBoundedString(limitation, CHAT_LIMITATION_MAX_LENGTH),
     ) ||
+    !Array.isArray(value.calculations) ||
+    value.calculations.length > 1 ||
+    !value.calculations.every(isCalculation) ||
     !isSafeCounter(value.step_count) ||
     !isSafeCounter(value.replan_count) ||
     !isSafeCounter(value.retry_count) ||
@@ -450,13 +527,24 @@ function isAgentRunData(value: unknown): value is AgentRunData {
   }
 
   if (value.terminal_status === 'completed') {
-    return (
+    const validGrounding =
       value.claims.length > 0 &&
       value.citations.length > 0 &&
       hasValidCitationGraph(value.claims, value.citations)
+    if (!validGrounding) return false
+    const calculations = value.calculations
+    const citations = value.citations
+    return calculations.every((calculation) =>
+      calculation.citation_ids.every((citationId) =>
+        citations.some((citation) => citation.citation_id === citationId),
+      ),
     )
   }
-  return value.claims.length === 0 && value.citations.length === 0
+  return (
+    value.claims.length === 0 &&
+    value.citations.length === 0 &&
+    value.calculations.length === 0
+  )
 }
 
 function invalidResponse(requestId: string | null) {

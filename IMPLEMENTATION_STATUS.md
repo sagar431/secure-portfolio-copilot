@@ -2,16 +2,15 @@
 
 ## Current step
 
-Playbook Steps 7 and 8 plus interview features 1 and 2 (deterministic model routing and scoped
-memory) are
-implementation-complete — Step 7 provides the embedded approved MCP gateway and two
-authorization-revalidating document tools; Step 8 provides separate typed Perception and Decision
+Playbook Steps 7 through 9 plus all three interview features are implementation-complete. Step 7
+provides the embedded approved MCP gateway and two authorization-revalidating document tools; Step
+8 provides separate typed Perception and Decision
 stages plus the host-owned bounded AgentLoop. The Step 6 grounded path remains intact. Live Runpod
 Kimi Perception, typed-catalog Decision, and grounded final-answer contracts pass. Simple,
 single-document, high-confidence grounded answers route to Mac Ollama `qwen3:8b`; complex,
 multi-document, low-confidence, and all agentic stages route to Runpod `kimi-k3`. Scoped private,
-Finance, Legal, and Shared memory is source-reauthorized before retrieval. Deterministic financial
-calculations remain pending.
+Finance, Legal, and Shared memory is source-reauthorized before retrieval. Step 9 adds three fixed
+financial calculators whose inputs are reauthorized and whose arithmetic/finalization is host-owned.
 
 ## Implemented
 
@@ -41,6 +40,14 @@ calculations remain pending.
 - `/api/memories` provides create/inspect/search/delete contracts and metadata-only audit events.
   The capability-gated `/memories` UI creates source-free private preferences, inspects only the
   server-filtered result, and honors a server-derived delete permission.
+- Three fixed MCP tools calculate EBITDA margin, revenue growth, and net profit margin from one
+  authorized approved P&L workbook. Inputs accept only company and period; every numeric cell is
+  literal, unit-checked, bounded, tied to an authorized chunk, and cited with exact provenance.
+- Host `Decimal` functions own formulas, denominator checks, rounding, and deterministic response
+  finalization. The model never supplies authoritative numbers or arithmetic. Missing, invalid,
+  ambiguous, unauthorized, and zero-denominator cases fail closed without evidence or results.
+- The `/chat` calculation card renders formula, result, trusted inputs/units/periods, and evidence
+  controls. Strict client validation rejects malformed calculation/citation graphs before display.
 
 - All completed Step 1–5 identity, authorization, ingestion, lifecycle, chunking, embedding, hybrid
   retrieval, citation, and evaluation behavior remains in place.
@@ -101,8 +108,8 @@ calculations remain pending.
   semantic retrieval rewrite, one replan, a 90-second total duration, a per-tool timeout, and at
   most one transient retry.
 - The official pinned `mcp==2.0.0` SDK runs an in-process request-scoped server/client. Its catalog is
-  statically limited to `portfolio.search_authorized_documents` and
-  `portfolio.get_document_excerpt`, filtered by the host shortlist and current capability, and
+  statically limited to two document tools and three fixed financial calculators, filtered by the
+  host shortlist and current capability, and
   rechecked at execution. Raw model arguments are strictly validated before MCP conversion; trusted
   `AuthorizationScope` is injected through host closures and both adapters reauthorize through the
   Step 5 database predicates.
@@ -116,7 +123,7 @@ calculations remain pending.
   observation, and safe budgets after a step. Decision receives manifest-derived authorized tool
   descriptors with exact per-tool inputs, not identity or scope. Only the host loop calls the MCP
   gateway. Final answers reuse Step 6 host citation reconstruction and validation.
-- The public trace contains only host UUID event IDs, eight stage/status types, the two approved
+- The public trace contains only host UUID event IDs, eight stage/status types, the five approved
   action names, host-issued `ev_N` references, bounded durations, counters, and explicit allow-listed
   reason/stopping codes. It excludes queries, prompts, plans, observations, excerpts, answers,
   authorization fields, paths, exceptions, secrets, and model rationale/reasoning. The frontend
@@ -203,7 +210,7 @@ failures.
 - Perception and Decision quality remains model-dependent. Deterministic host validation constrains
   actions, authority, bounds, and trace/output shape, but it does not prove that a plan is optimal.
 - The MCP gateway is embedded in-process. There is no remote MCP transport, dynamic discovery,
-  multi-agent coordination, deterministic financial calculation, or general sandbox.
+  multi-agent coordination, arbitrary calculation/code execution, or general sandbox.
 - Production still requires `EMBEDDING_PROVIDER=disabled`; therefore the current synchronous Step 5
   retrieval dependency makes grounded chat a local demonstration rather than a production-ready
   deployment. A production embedding/indexing design remains necessary.
@@ -215,5 +222,5 @@ fake-provider, live Runpod Kimi, chat/API/UI, authorization, redaction, and fail
 
 ## Next approved step
 
-Complete interview feature 3, the deterministic financial calculator tools, then run the combined
-three-feature acceptance gate. Playbook Step 9 has not started in this checkpoint.
+Run the combined three-feature acceptance gate, live dual-route smoke, and branch publication. No
+additional product feature is approved in this checkpoint.

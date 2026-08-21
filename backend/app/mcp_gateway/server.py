@@ -20,7 +20,7 @@ def build_in_process_mcp_server(
     server = MCPServer(
         "secure-portfolio-approved-tools",
         version="1.0.0",
-        instructions="Use only the two statically registered portfolio evidence tools.",
+        instructions="Use only the statically registered portfolio evidence and calculation tools.",
         warn_on_duplicate_tools=True,
     )
 
@@ -50,5 +50,33 @@ def build_in_process_mcp_server(
                 permitted_tools=permitted_tools,
                 request_id=request_id,
             )
+
+    calculator_tools = (
+        ApprovedToolName.CALCULATE_EBITDA_MARGIN,
+        ApprovedToolName.CALCULATE_REVENUE_GROWTH,
+        ApprovedToolName.CALCULATE_NET_PROFIT_MARGIN,
+    )
+
+    def register_calculator(calculator_name: ApprovedToolName) -> None:
+        async def calculate_metric(
+            company_slug: str,
+            reporting_period: str,
+        ) -> StructuredToolObservation:
+            return await gateway.execute(
+                tool_name=calculator_name.value,
+                arguments={
+                    "company_slug": company_slug,
+                    "reporting_period": reporting_period,
+                },
+                authorization_scope=authorization_scope,
+                permitted_tools=permitted_tools,
+                request_id=request_id,
+            )
+
+        server.tool(name=calculator_name.value, structured_output=True)(calculate_metric)
+
+    for calculator_name in calculator_tools:
+        if calculator_name in catalog:
+            register_calculator(calculator_name)
 
     return server

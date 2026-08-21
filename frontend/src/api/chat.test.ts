@@ -9,6 +9,7 @@ import {
 import { ApiError } from './client'
 import {
   agentRunData,
+  calculationRunData,
   conversationData,
   groundedAnswerData,
   insufficientAnswerData,
@@ -141,6 +142,99 @@ describe('conversation API', () => {
     }
     expect(JSON.parse(options.body)).toEqual({
       content: 'Use the bounded workflow.',
+    })
+  })
+
+  it('accepts a strict host-computed calculation with trusted input citations', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          data: calculationRunData,
+          request_id: 'calculation-run-request',
+        }),
+      ),
+    )
+
+    await expect(
+      runConversationAgent(
+        'signed-token',
+        conversationData.id,
+        'Calculate Orion EBITDA margin for FY2025.',
+      ),
+    ).resolves.toMatchObject({
+      data: {
+        calculations: [
+          {
+            metric: 'ebitda_margin',
+            result: 10,
+            citation_ids: ['ev_1', 'ev_2', 'ev_3'],
+          },
+        ],
+      },
+    })
+  })
+
+  it.each([
+    [
+      'an empty formula',
+      {
+        ...calculationRunData,
+        calculations: [{ ...calculationRunData.calculations[0], formula: '' }],
+      },
+    ],
+    [
+      'an untrusted input unit',
+      {
+        ...calculationRunData,
+        calculations: [
+          {
+            ...calculationRunData.calculations[0],
+            trusted_inputs:
+              calculationRunData.calculations[0].trusted_inputs.map(
+                (input, index) =>
+                  index === 0 ? { ...input, unit: 'model estimate' } : input,
+              ),
+          },
+        ],
+      },
+    ],
+    [
+      'a calculation citation outside the authorized response',
+      {
+        ...calculationRunData,
+        calculations: [
+          {
+            ...calculationRunData.calculations[0],
+            citation_ids: ['ev_1', 'ev_2', 'ev_9'],
+            trusted_inputs:
+              calculationRunData.calculations[0].trusted_inputs.map(
+                (input, index) =>
+                  index === 2 ? { ...input, citation_id: 'ev_9' } : input,
+              ),
+          },
+        ],
+      },
+    ],
+  ])('rejects calculator output containing %s', async (_case, data) => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ data, request_id: 'invalid-calculation-request' }),
+        ),
+    )
+
+    await expect(
+      runConversationAgent(
+        'signed-token',
+        conversationData.id,
+        'Calculate Orion EBITDA margin for FY2025.',
+      ),
+    ).rejects.toMatchObject({
+      code: 'invalid_response',
+      requestId: 'invalid-calculation-request',
     })
   })
 
