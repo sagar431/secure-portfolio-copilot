@@ -19,6 +19,7 @@ from app.agent.rule_based_fake import RuleBasedFakeAgentProvider
 from app.agent.runpod import RunpodKimiDecisionProvider, RunpodKimiPerceptionProvider
 from app.core.config import Settings
 from app.mcp_gateway.contracts import PermittedToolDescriptor
+from app.model_routing import RouteReason
 from app.runpod_kimi import RunpodKimiClient
 
 
@@ -67,6 +68,12 @@ class DisabledAgentProvider:
     ) -> DecisionResult:
         del query, perception, current_plan, completed_steps, permitted_tool_catalog
         self._disabled()
+
+
+def agent_route_reason(settings: Settings) -> str:
+    if settings.llm_provider == "router":
+        return RouteReason.AGENTIC_REQUEST.value
+    return "PROVIDER_SELECTED"
 
 
 def create_agent_stage_providers(

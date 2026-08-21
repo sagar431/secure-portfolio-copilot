@@ -1,7 +1,7 @@
 # Step 9 + Interview Features Testing Guide
 
 Run commands from the locations shown. Tests use only synthetic identities and an isolated tmpfs
-PostgreSQL test service. On 2026-08-21 these commands passed with 298 backend tests and 98
+PostgreSQL test service. On 2026-08-21 these commands passed with 301 backend tests and 98
 frontend tests. Automated tests configure deterministic fake embedding, LLM, Perception, Decision,
 and MCP adapters and require neither Ollama, a live model provider, a provider key, nor network access.
 
@@ -40,7 +40,8 @@ These checks prove private-user/Finance/Legal/Shared isolation across users, dep
 and tenants; rejection of forged ACL/owner fields and source widening; expiry, soft deletion, and
 source-revocation behavior; authorization before full-text ranking; prompt-injection containment;
 metadata-only logging; strict client parsing; and inspector/delete behavior. Validate migration
-`0008` with `0006 -> 0008 -> 0007 -> 0008` plus `uv run alembic check`.
+`0008` with `uv run alembic upgrade head`, `uv run alembic check`, `uv run alembic downgrade
+20260821_0006`, `uv run alembic upgrade head`, and a final `uv run alembic check`.
 
 ## Focused deterministic calculator checks
 

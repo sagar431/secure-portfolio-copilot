@@ -365,3 +365,22 @@ async def test_copied_source_acl_corruption_hides_memory(
     )
     assert inspected.status_code == 200
     assert inspected.json()["data"]["memories"] == []
+
+    async with auth_harness.session_factory() as session:
+        source = (
+            (await session.execute(select(MemorySource).where(MemorySource.memory_id == memory_id)))
+            .scalars()
+            .one()
+        )
+        source.department = chunks["orion_finance"].department
+        source.visibility = chunks["orion_finance"].visibility
+        source.classification = chunks["orion_finance"].classification
+        source.document_id = chunks["orion_shared"].document_id
+        source.document_version_id = chunks["orion_shared"].document_version_id
+        await session.commit()
+
+    provenance_corrupted = await auth_harness.client.get(
+        "/api/memories", headers={"Authorization": f"Bearer {alice}"}
+    )
+    assert provenance_corrupted.status_code == 200
+    assert provenance_corrupted.json()["data"]["memories"] == []

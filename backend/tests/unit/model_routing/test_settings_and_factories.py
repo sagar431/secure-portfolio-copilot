@@ -1,7 +1,7 @@
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from app.agent.factory import create_agent_stage_providers
+from app.agent.factory import agent_route_reason, create_agent_stage_providers
 from app.agent.runpod import RunpodKimiDecisionProvider, RunpodKimiPerceptionProvider
 from app.chat.factory import create_agent_finalizer, create_llm_provider
 from app.chat.router import DeterministicRoutingLLMProvider
@@ -46,3 +46,4 @@ def test_router_factory_routes_only_grounded_simple_work_to_qwen() -> None:
     assert isinstance(perception, RunpodKimiPerceptionProvider)
     assert isinstance(decision, RunpodKimiDecisionProvider)
     assert isinstance(finalizer, RunpodKimiLLMProvider)
+    assert agent_route_reason(settings) == "AGENTIC_REQUEST"

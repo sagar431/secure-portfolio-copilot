@@ -17,6 +17,8 @@ financial calculators whose inputs are reauthorized and whose arithmetic/finaliz
 - A pure host-owned model policy runs only after authorization-first retrieval. It uses workload
   kind, distinct authorized document count, top authorized retrieval score, and bounded query-shape
   rules; no model, prompt, identity claim, or client field can choose authority or override a route.
+  The router derives the question and distinct-document count from the actual authorized generation
+  request, so inconsistent internal signal metadata cannot downgrade multi-document work.
 - The Qwen adapter is pinned to `http://192.168.31.213:11434` and `qwen3:8b`, disables environment
   proxy inheritance, tools, streaming, and thinking, validates strict grounded JSON, rejects visible
   thinking markers, and has its own timeout. Retryable Qwen failures may fall forward to Kimi;
@@ -33,10 +35,12 @@ financial calculators whose inputs are reauthorized and whose arithmetic/finaliz
   restriction (with private visibility allowed only as a narrowing operation).
 - Memory list/search/get first materializes current tenant, company, department, private owner,
   classification, expiry, deletion, and source authorization. Revoked/rejected/deleted source
-  chunks make their memory invisible immediately. Search ranks only that materialized visible set.
+  chunks make their memory invisible immediately. Copied document/version provenance must also
+  match the current authorized source chunk. Search ranks only that materialized visible set.
 - The grounded-chat prompt may receive at most five company-matched visible memories. They are
   serialized separately as untrusted, non-evidentiary context; embedded commands are ignored and
-  memory IDs cannot satisfy document citation validation.
+  memory IDs cannot satisfy document citation validation. Evidence tenant/company pairs are
+  resolved against authorized company IDs in the database without positional ID/slug assumptions.
 - `/api/memories` provides create/inspect/search/delete contracts and metadata-only audit events.
   The capability-gated `/memories` UI creates source-free private preferences, inspects only the
   server-filtered result, and honors a server-derived delete permission.
@@ -111,8 +115,8 @@ financial calculators whose inputs are reauthorized and whose arithmetic/finaliz
   statically limited to two document tools and three fixed financial calculators, filtered by the
   host shortlist and current capability, and
   rechecked at execution. Raw model arguments are strictly validated before MCP conversion; trusted
-  `AuthorizationScope` is injected through host closures and both adapters reauthorize through the
-  Step 5 database predicates.
+  `AuthorizationScope` is injected through host closures and all five adapters reauthorize through
+  the Step 5 database predicates.
 - Startup validates unique namespaced ownership plus exact input/output schema and capability
   mappings. Unknown/unshortlisted tools, forged scope fields, malformed input/output, missing or
   unauthorized IDs, provider failures, and bounds terminate with safe typed observations.
@@ -180,13 +184,18 @@ places malformed/incomplete responses inside the same strict two-attempt total b
 failures.
 
 All three interview features were independently checkpointed and jointly verified on 2026-08-21.
-Backend Ruff format/lint, strict mypy, and all 298 pytest cases pass. Frontend Prettier, ESLint,
+Backend Ruff format/lint, strict mypy, and all 301 pytest cases pass. Frontend Prettier, ESLint,
 strict TypeScript, all 98 Vitest cases, the zero-vulnerability npm audit, and production build pass.
 Migration `0008 -> 0006 -> 0008` exercises both router and memory revisions and finishes at head
 with no schema drift. The live router smoke returned Qwen `SIMPLE_LOW_RISK` and Kimi
 `MULTI_DOCUMENT`, each supported with no fallback. Calculator integration proves exact 10% EBITDA
 margin, 25% revenue growth, and 3% net profit margin plus missing, malformed, zero-denominator, and
 authorization failures.
+The completion audit additionally verifies paired multi-company scope construction,
+database-resolved company-matched chat memory, copied source document/version integrity,
+actual-request-derived router signals, and agentic route-reason persistence. A fresh live smoke
+again returned supported Qwen `SIMPLE_LOW_RISK` and Kimi `MULTI_DOCUMENT` responses without
+fallback.
 
 ## Known limitations
 
@@ -194,6 +203,14 @@ authorization failures.
   rejected in production; a production deployment requires an authenticated, encrypted approved
   economical-model endpoint. The retrieval score threshold is a deterministic routing heuristic,
   not a calibrated probability.
+
+- Authorization is a database-derived request-start snapshot. Grant changes are enforced on the
+  next request; the application does not replace that snapshot during an in-flight request between
+  retrieval or calculator steps.
+
+- Scoped memory is an explicit inspect/create/search/delete facility and optional grounded-chat
+  context. It does not yet provide model-proposed memory candidates, MCP memory tools, automatic
+  transcript memory, or a correction workflow.
 
 - The agent trace is response-only; Steps 7 and 8 do not add AgentRun/Plan/Step/Observation persistence or
   a trace-history endpoint. Existing message content and metadata-only request traces still persist.

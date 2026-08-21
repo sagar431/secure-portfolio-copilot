@@ -105,6 +105,12 @@ def build_authorization_context(user: User) -> AuthorizationContext | None:
                 and Capability.QUERY_DOCUMENTS in capabilities
             ]
             workspace = workspace_by_id[workspace_id]
+            ordered_companies = tuple(
+                sorted(
+                    {company.id: company for company in companies}.values(),
+                    key=lambda company: str(company.id),
+                )
+            )
             authorization_grants.append(
                 AuthorizationGrant(
                     membership_id=membership.id,
@@ -116,8 +122,8 @@ def build_authorization_context(user: User) -> AuthorizationContext | None:
                     workspace_name=workspace.name,
                     role=membership.role.key,
                     primary_department=membership.primary_department.key,
-                    company_ids=tuple(sorted({company.id for company in companies}, key=str)),
-                    company_slugs=tuple(sorted({company.slug for company in companies})),
+                    company_ids=tuple(company.id for company in ordered_companies),
+                    company_slugs=tuple(company.slug for company in ordered_companies),
                     departments=tuple(sorted(departments, key=lambda item: item.key)),
                     capabilities=tuple(sorted(capabilities, key=lambda item: item.value)),
                 )

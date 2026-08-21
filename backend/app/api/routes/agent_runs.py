@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.factory import create_agent_stage_providers
+from app.agent.factory import agent_route_reason, create_agent_stage_providers
 from app.agent.gateway_adapter import AgentGatewayAdapter
 from app.agent.loop import AgentLoop
 from app.agent.models import AgentLoopLimits
@@ -60,7 +60,13 @@ def get_agent_run_service(
             max_duration_seconds=settings.agent_max_duration_seconds,
         ),
     )
-    return AgentRunService(session, loop, gateway, model_name=perception.model_name)
+    return AgentRunService(
+        session,
+        loop,
+        gateway,
+        model_name=perception.model_name,
+        route_reason_code=agent_route_reason(settings),
+    )
 
 
 AgentService = Annotated[AgentRunService, Depends(get_agent_run_service)]

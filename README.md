@@ -190,7 +190,7 @@ npm audit --audit-level=high
 npm run build
 ```
 
-The current implementation passes 298 backend tests and 98 frontend Vitest tests, plus backend
+The current implementation passes 301 backend tests and 98 frontend Vitest tests, plus backend
 format/lint/strict-type gates. Live Runpod Kimi initial/step-result
 Perception, initial/mid-session Decision, and grounded final-answer contracts pass against
 `kimi-k3`; the final answer contained one host-validatable cited claim with no retry. The final

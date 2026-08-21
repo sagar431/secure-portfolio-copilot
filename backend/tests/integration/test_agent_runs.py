@@ -122,6 +122,8 @@ async def test_bounded_agent_run_preserves_citations_and_sanitized_trace(
     assert [item.role for item in messages] == ["user", "assistant"]
     assert trace.status == "grounded"
     assert trace.reason_code == "COMPLETED"
+    assert trace.route_reason_code == "PROVIDER_SELECTED"
+    assert trace.fallback_used is False
     assert trace.retrieved_document_ids and trace.retrieved_chunk_ids
 
 
@@ -168,5 +170,7 @@ async def test_agent_run_owner_and_scope_denials_fail_before_retrieval(
         )
     assert len(traces) == 1
     assert traces[0].reason_code == "SCOPE_DENIED"
+    assert traces[0].route_reason_code == "NO_MODEL_CALL"
+    assert traces[0].fallback_used is False
     assert traces[0].retrieved_document_ids == []
     assert traces[0].retrieved_chunk_ids == []

@@ -6,7 +6,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.documents import DocumentChunk, DocumentClassification, DocumentVisibility
-from app.models.identity import Capability
+from app.models.identity import Capability, Company, CompanyStatus
 from app.models.memory import Memory, MemoryScope, MemorySource
 from app.policies.models import AuthorizationScope
 from app.retrieval.repository import authorized_chunks_statement
@@ -75,6 +75,8 @@ def _visible_memory_ids(scope: AuthorizationScope):  # type: ignore[no-untyped-d
         authorized_chunks_statement(scope)
         .with_only_columns(
             DocumentChunk.id.label("chunk_id"),
+            DocumentChunk.document_id.label("document_id"),
+            DocumentChunk.document_version_id.label("document_version_id"),
             DocumentChunk.tenant_id.label("tenant_id"),
             DocumentChunk.company_id.label("company_id"),
             DocumentChunk.department.label("department"),
@@ -87,6 +89,8 @@ def _visible_memory_ids(scope: AuthorizationScope):  # type: ignore[no-untyped-d
     authorized_source_match = exists(
         select(authorized_sources.c.chunk_id).where(
             authorized_sources.c.chunk_id == MemorySource.chunk_id,
+            authorized_sources.c.document_id == MemorySource.document_id,
+            authorized_sources.c.document_version_id == MemorySource.document_version_id,
             authorized_sources.c.tenant_id == MemorySource.tenant_id,
             authorized_sources.c.company_id == MemorySource.company_id,
             authorized_sources.c.department == MemorySource.department,
@@ -130,6 +134,47 @@ async def load_authorized_source_chunks(
                 authorized_chunks_statement(scope).where(DocumentChunk.id.in_(source_ids))
             )
         )
+        .scalars()
+        .all()
+    )
+    return tuple(rows)
+
+
+async def resolve_authorized_company_ids(
+    session: AsyncSession,
+    scope: AuthorizationScope,
+    *,
+    evidence_companies: tuple[tuple[str, str], ...],
+) -> tuple[UUID, ...]:
+    """Resolve retrieved tenant/company slugs without trusting parallel grant tuple positions."""
+
+    predicates = []
+    for grant in scope.grants:
+        if Capability.QUERY_DOCUMENTS not in grant.capabilities or not grant.company_ids:
+            continue
+        company_slugs = tuple(
+            sorted(
+                {
+                    company_slug
+                    for workspace_slug, company_slug in evidence_companies
+                    if workspace_slug == grant.workspace_slug
+                }
+            )
+        )
+        if not company_slugs:
+            continue
+        predicates.append(
+            and_(
+                Company.tenant_id == grant.workspace_id,
+                Company.id.in_(grant.company_ids),
+                Company.slug.in_(company_slugs),
+                Company.status == CompanyStatus.ACTIVE.value,
+            )
+        )
+    if not predicates:
+        return ()
+    rows = (
+        (await session.execute(select(Company.id).where(or_(*predicates)).order_by(Company.id)))
         .scalars()
         .all()
     )

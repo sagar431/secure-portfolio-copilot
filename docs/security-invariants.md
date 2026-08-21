@@ -299,7 +299,7 @@ provider no-tool/bound/retry behavior, fake-provider grounded answers, citation 
 sanitized trace/log behavior, and all chat UI states. Steps 7 and 8 add adversarial action/gateway/MCP,
 strict schema, startup catalog, timeout/retry/denial, loop-limit/replan/rewrite, prompt-injection,
 typed perception/catalog, plan-version/order/history/replay, trace-smuggling, evidence/citation,
-real excerpt, and agent UI tests. Final verification passes 298 backend and 98 frontend tests,
+real excerpt, and agent UI tests. Final verification passes 301 backend and 98 frontend tests,
 migration `0008 -> 0006 -> 0008` reversibility/drift checks, local MCP smoke,
 production/integrity gates, and the zero-vulnerability frontend audit. Live Qwen/Kimi routing plus
 Runpod Kimi Perception, typed-catalog Decision, and grounded finalization pass.

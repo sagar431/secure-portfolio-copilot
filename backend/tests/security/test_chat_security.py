@@ -560,6 +560,68 @@ async def test_authorized_retrieval_precedes_prompt_and_only_retrieved_evidence_
 
 
 @pytest.mark.asyncio
+async def test_chat_memory_company_is_resolved_without_parallel_tuple_pairing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base_context = _context()
+    base_grant = base_context.scope.grants[0]
+    other_company_id = uuid4()
+    evidence_company_id = uuid4()
+    grant = base_grant.model_copy(
+        update={
+            "company_ids": (other_company_id, evidence_company_id),
+            "company_slugs": ("orion-main", "other-company"),
+        }
+    )
+    scope = base_context.scope.model_copy(update={"grants": (grant,)})
+    context = base_context.model_copy(update={"scope": scope})
+    result = _search_result()
+    conversation = SimpleNamespace(
+        id=uuid4(),
+        tenant_id=grant.home_tenant_id,
+        user_id=context.identity.user_id,
+    )
+    captured: dict[str, object] = {}
+
+    async def resolve_companies(*_: object, **kwargs: object) -> tuple[object, ...]:
+        captured["evidence_companies"] = kwargs["evidence_companies"]
+        return (evidence_company_id,)
+
+    async def list_memories(*_: object, **kwargs: object) -> tuple[object, ...]:
+        captured["company_ids"] = kwargs["company_ids"]
+        return (SimpleNamespace(id=uuid4(), scope="FINANCE", content="evidence-company memory"),)
+
+    monkeypatch.setattr(
+        "app.chat.service.get_owned_conversation",
+        lambda *args, **kwargs: _async_value(conversation),
+    )
+    monkeypatch.setattr("app.chat.service.add_message", _message_stub)
+    monkeypatch.setattr("app.chat.service.add_trace", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.chat.service.resolve_authorized_company_ids", resolve_companies)
+    monkeypatch.setattr("app.chat.service.list_visible_memories", list_memories)
+    provider = _RecordingProvider()
+    service = GroundedChatService(  # type: ignore[arg-type]
+        _Session(),
+        _SearchService((result,)),
+        provider,
+        max_evidence_chunks=5,
+        max_memory_items=5,
+    )
+
+    response = await service.answer(
+        context,
+        conversation_id=conversation.id,
+        question="what was orion revenue?",
+        request_id="chat-memory-company-pairing",
+    )
+
+    assert response.status == "grounded"
+    assert captured["evidence_companies"] == (("orion", "orion-main"),)
+    assert captured["company_ids"] == (evidence_company_id,)
+    assert provider.requests[0].memories[0].content == "evidence-company memory"
+
+
+@pytest.mark.asyncio
 async def test_missing_query_capability_denies_before_retrieval_or_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

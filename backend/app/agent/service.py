@@ -36,11 +36,13 @@ class AgentRunService:
         gateway: ApprovedToolGateway,
         *,
         model_name: str,
+        route_reason_code: str,
     ) -> None:
         self._session = session
         self._loop = loop
         self._gateway = gateway
         self._model_name = model_name
+        self._route_reason_code = route_reason_code
 
     @staticmethod
     def _scope_denied_outcome() -> AgentRunOutcome:
@@ -120,9 +122,11 @@ class AgentRunService:
             content=question,
             request_id=request_id,
         )
+        route_reason_code = "NO_MODEL_CALL"
         if not request_matches_authorized_scope(context, question):
             outcome = self._scope_denied_outcome()
         else:
+            route_reason_code = self._route_reason_code
             permitted_tool_catalog = self._gateway.permitted_catalog(
                 context.scope, APPROVED_TOOL_NAMES
             )
@@ -165,6 +169,7 @@ class AgentRunService:
             output_tokens=None,
             latency_ms=max(0, int((time.monotonic() - started) * 1000)),
             retry_count=outcome.retry_count,
+            route_reason_code=route_reason_code,
         )
         await self._session.commit()
         logger.info(

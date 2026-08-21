@@ -30,11 +30,18 @@ class DeterministicRoutingLLMProvider:
         self._low_confidence_threshold = low_confidence_threshold
 
     async def generate(self, request: GroundedGenerationRequest) -> LLMGeneration:
-        signals = request.routing or RoutingSignals(
-            workload=WorkloadKind.GROUNDED_ANSWER,
+        supplied_signals = request.routing
+        signals = RoutingSignals(
+            workload=(
+                supplied_signals.workload
+                if supplied_signals is not None
+                else WorkloadKind.GROUNDED_ANSWER
+            ),
             question=request.question,
             authorized_document_count=len({item.document_id for item in request.evidence}),
-            top_retrieval_score=None,
+            top_retrieval_score=(
+                supplied_signals.top_retrieval_score if supplied_signals is not None else None
+            ),
         )
         decision = route_model(
             signals,

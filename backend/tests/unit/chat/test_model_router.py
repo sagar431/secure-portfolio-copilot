@@ -92,6 +92,31 @@ async def test_multi_document_request_uses_kimi_and_never_downgrades() -> None:
 
 
 @pytest.mark.asyncio
+async def test_router_derives_question_and_document_count_from_the_actual_request() -> None:
+    qwen = _Provider("qwen3:8b")
+    kimi = _Provider("kimi-k3")
+    router = DeterministicRoutingLLMProvider(qwen=qwen, kimi=kimi, low_confidence_threshold=0.55)
+    request = _request(documents=2)
+    assert request.routing is not None
+    mismatched = GroundedGenerationRequest(
+        question="Compare revenue across the authorized documents.",
+        evidence=request.evidence,
+        routing=RoutingSignals(
+            workload=WorkloadKind.GROUNDED_ANSWER,
+            question="simple",
+            authorized_document_count=1,
+            top_retrieval_score=0.99,
+        ),
+    )
+
+    generation = await router.generate(mismatched)
+
+    assert not qwen.requests
+    assert kimi.requests == [mismatched]
+    assert generation.usage.route_reason == "MULTI_DOCUMENT"
+
+
+@pytest.mark.asyncio
 async def test_qwen_timeout_falls_back_to_kimi_with_same_authorized_request() -> None:
     qwen = _Provider("qwen3:8b", LLMProviderError(LLMErrorCode.TIMEOUT, transient=True))
     kimi = _Provider("kimi-k3")
