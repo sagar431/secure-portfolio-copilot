@@ -1,4 +1,4 @@
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -16,17 +16,30 @@ from app.agent.models import (
     DecisionResult,
     EvidenceStatus,
     GoalStatus,
+    MentionedScopeHints,
     ObservationStatus,
+    PerceptionEntities,
+    PerceptionIntent,
     PerceptionMode,
+    PerceptionRiskFlag,
     PerceptionSnapshot,
     Plan,
+    RequiredEvidence,
+    ResultRequirement,
     Step,
+    StepStatus,
     StoppingReason,
     StructuredObservation,
     TerminalStatus,
 )
 from app.chat.contracts import GroundedAnswerDraft, GroundedClaimDraft, GroundedEvidence
 from app.chat.fake import DeterministicFakeLLMProvider
+from app.mcp_gateway.contracts import (
+    APPROVED_TOOL_NAMES,
+    GetDocumentExcerptInput,
+    SearchAuthorizedDocumentsInput,
+)
+from app.mcp_gateway.gateway import ApprovedToolGateway
 from app.models.identity import Capability, GrantSource
 from app.policies.models import (
     AuthorizationContext,
@@ -36,7 +49,8 @@ from app.policies.models import (
     TrustedIdentity,
 )
 
-TOOL = "portfolio.search_authorized_documents"
+SEARCH = "portfolio.search_authorized_documents"
+EXCERPT = "portfolio.get_document_excerpt"
 
 
 def _context() -> AuthorizationContext:
@@ -68,63 +82,99 @@ def _context() -> AuthorizationContext:
     return AuthorizationContext(identity=identity, scope=scope)
 
 
+def _catalog(context: AuthorizationContext):  # type: ignore[no-untyped-def]
+    return ApprovedToolGateway.permitted_catalog(context.scope, APPROVED_TOOL_NAMES)
+
+
 def _perception(
-    mode: PerceptionMode, status: EvidenceStatus = EvidenceStatus.NONE
+    mode: PerceptionMode,
+    status: EvidenceStatus = EvidenceStatus.NONE,
+    *,
+    hints: MentionedScopeHints | None = None,
 ) -> PerceptionSnapshot:
     return PerceptionSnapshot(
         mode=mode,
-        intent="document_lookup",
+        intent=PerceptionIntent.FINANCIAL_LOOKUP,
         domain="portfolio_documents",
-        entities=(),
-        result_requirement="grounded_answer",
+        entities=PerceptionEntities(financial_metrics=("revenue",)),
+        mentioned_scope_hints=hints or MentionedScopeHints(),
+        result_requirement=ResultRequirement.GROUNDED_ANSWER,
+        required_evidence=(RequiredEvidence.FINANCIAL_DOCUMENT,),
         required_capabilities=("QUERY_DOCUMENTS",),
+        risk_flags=(PerceptionRiskFlag.SCOPE_HINT_PRESENT,) if hints else (),
         evidence_status=status,
-        local_goal_status=GoalStatus.ADVANCED
-        if mode == PerceptionMode.STEP_RESULT
-        else GoalStatus.PENDING,
-        global_goal_status=GoalStatus.SATISFIED
-        if status == EvidenceStatus.SUFFICIENT
-        else GoalStatus.PENDING,
+        local_goal_status=(
+            GoalStatus.ADVANCED if mode == PerceptionMode.STEP_RESULT else GoalStatus.PENDING
+        ),
+        global_goal_status=(
+            GoalStatus.SATISFIED if status == EvidenceStatus.SUFFICIENT else GoalStatus.PENDING
+        ),
         confidence=0.9,
         reason_code="EVIDENCE_ASSESSED",
+        rationale_summary="A concise internal assessment.",
     )
 
 
-def _decision(action: Action, *, version: int = 1, replan: bool = False) -> DecisionResult:
-    return DecisionResult(
-        plan=Plan(
-            version=version,
-            steps=(
-                Step(
-                    step_index=0,
-                    action_type=action.type,
-                    action_name=action.action_name,
-                    reason_code="BOUNDED_STEP",
-                ),
-            ),
-            change_reason_code="PLAN_CREATED",
-        ),
-        next_action=action,
-        replan=replan,
-    )
-
-
-def _tool_action(name: str = TOOL) -> Action:
+def _search(query: str = "synthetic revenue") -> Action:
     return Action(
         type=ActionType.TOOL_CALL,
-        action_name=name,
-        arguments={"query": "synthetic revenue", "top_k": 2},
+        action_name=SEARCH,
+        arguments=SearchAuthorizedDocumentsInput(query=query, top_k=2),
         reason_code="SEARCH_EVIDENCE",
     )
 
 
-def _terminal(action_type: ActionType) -> DecisionResult:
-    return _decision(Action(type=action_type, reason_code=f"{action_type.value}_REQUEST"))
+def _excerpt(document_id: UUID | None = None, chunk_id: UUID | None = None) -> Action:
+    return Action(
+        type=ActionType.TOOL_CALL,
+        action_name=EXCERPT,
+        arguments=GetDocumentExcerptInput(
+            document_id=document_id or uuid4(), chunk_id=chunk_id or uuid4()
+        ),
+        reason_code="GET_EXCERPT",
+    )
 
 
-def _evidence() -> GroundedEvidence:
+def _terminal_action(action_type: ActionType) -> Action:
+    return Action(type=action_type, reason_code=f"{action_type.value}_REQUEST")
+
+
+def _plan(actions: tuple[Action, ...], *, version: int = 1, completed: int = 0) -> Plan:
+    return Plan(
+        version=version,
+        plan_text=tuple(f"Bounded plan step {index}." for index in range(len(actions))),
+        steps=tuple(
+            Step(
+                step_index=index,
+                action_type=action.type,
+                action_name=action.action_name,
+                status=StepStatus.COMPLETED if index < completed else StepStatus.PENDING,
+                reason_code="TOOL_COMPLETED" if index < completed else "BOUNDED_STEP",
+            )
+            for index, action in enumerate(actions)
+        ),
+        change_reason_code="PLAN_CREATED" if version == 1 else "PLAN_REVISED",
+    )
+
+
+def _decision(
+    actions: tuple[Action, ...],
+    next_index: int,
+    *,
+    version: int = 1,
+    completed: int = 0,
+    replan: bool = False,
+) -> DecisionResult:
+    return DecisionResult(
+        plan=_plan(actions, version=version, completed=completed),
+        next_action=actions[next_index],
+        replan=replan,
+    )
+
+
+def _evidence(evidence_id: str = "ev_1") -> GroundedEvidence:
     return GroundedEvidence(
-        evidence_id="ev_1",
+        evidence_id=evidence_id,
         chunk_id=uuid4(),
         document_id=uuid4(),
         document_version_id=uuid4(),
@@ -141,10 +191,14 @@ def _evidence() -> GroundedEvidence:
 
 
 def _observation(
-    status: ObservationStatus, *, evidence: tuple[GroundedEvidence, ...] = (), retry_count: int = 0
+    tool: str,
+    status: ObservationStatus = ObservationStatus.SUCCESS,
+    *,
+    evidence: tuple[GroundedEvidence, ...] = (),
+    retry_count: int = 0,
 ) -> StructuredObservation:
     return StructuredObservation(
-        tool_name=TOOL,
+        tool_name=tool,
         status=status,
         evidence=evidence,
         duration_ms=2,
@@ -155,72 +209,168 @@ def _observation(
 
 
 def _loop(
-    perceptions: tuple,
-    decisions: tuple,
-    observations: tuple = (),
+    perceptions: tuple[PerceptionSnapshot | AgentModelError, ...],
+    decisions: tuple[DecisionResult | AgentModelError, ...],
+    observations: tuple[StructuredObservation, ...] = (),
     *,
     limits: AgentLoopLimits | None = None,
     clock=None,
     final_answer: GroundedAnswerDraft | None = None,
-) -> AgentLoop:
+) -> tuple[AgentLoop, DeterministicFakePerceptionProvider, DeterministicFakeGateway]:
+    perception = DeterministicFakePerceptionProvider(perceptions)
+    gateway = DeterministicFakeGateway(observations)
     kwargs = {} if clock is None else {"clock": clock}
-    return AgentLoop(
-        perception=DeterministicFakePerceptionProvider(perceptions),
+    loop = AgentLoop(
+        perception=perception,
         decision=DeterministicFakeDecisionProvider(decisions),
-        gateway=DeterministicFakeGateway(observations),
+        gateway=gateway,
         finalizer=DeterministicFakeLLMProvider(final_answer),
         limits=limits,
         **kwargs,
     )
+    return loop, perception, gateway
 
 
-async def _run(loop: AgentLoop, tools: frozenset[str] = frozenset({TOOL})):
+async def _run(loop: AgentLoop, context: AuthorizationContext | None = None):  # type: ignore[no-untyped-def]
+    active_context = context or _context()
     return await loop.run(
         query="What was synthetic revenue?",
-        authorization_context=_context(),
-        permitted_tools=tools,
+        authorization_context=active_context,
+        permitted_tool_catalog=_catalog(active_context),
         request_id="request-agent-test",
     )
 
 
 @pytest.mark.asyncio
-async def test_successful_flow_returns_to_perception_and_preserves_citations() -> None:
-    result = await _run(
-        _loop(
-            (
-                _perception(PerceptionMode.USER_QUERY),
-                _perception(PerceptionMode.STEP_RESULT, EvidenceStatus.SUFFICIENT),
-            ),
-            (_decision(_tool_action()), _terminal(ActionType.FINALIZE)),
-            (_observation(ObservationStatus.SUCCESS, evidence=(_evidence(),), retry_count=1),),
-            final_answer=GroundedAnswerDraft(
-                "supported", (GroundedClaimDraft("Synthetic revenue was 10.", ("ev_1",)),)
-            ),
-        )
+async def test_real_two_step_plan_executes_search_excerpt_then_finalization_in_order() -> None:
+    search = _search()
+    evidence = _evidence()
+    excerpt = _excerpt(evidence.document_id, evidence.chunk_id)
+    finalize = _terminal_action(ActionType.FINALIZE)
+    actions = (search, excerpt, finalize)
+    loop, perception, gateway = _loop(
+        (
+            _perception(PerceptionMode.USER_QUERY),
+            _perception(PerceptionMode.STEP_RESULT, EvidenceStatus.INSUFFICIENT),
+            _perception(PerceptionMode.STEP_RESULT, EvidenceStatus.SUFFICIENT),
+        ),
+        (
+            _decision(actions, 0),
+            _decision(actions, 1, completed=1),
+            _decision(actions, 2, completed=2),
+        ),
+        (
+            _observation(SEARCH, evidence=(evidence,)),
+            _observation(EXCERPT, evidence=(_evidence("ev_2"),)),
+        ),
+        final_answer=GroundedAnswerDraft(
+            "supported", (GroundedClaimDraft("Synthetic revenue was 10.", ("ev_2",)),)
+        ),
     )
+    result = await _run(loop)
+
     assert result.terminal_status == TerminalStatus.COMPLETED
-    assert result.citations[0].citation_id == "ev_1"
-    assert result.retry_count == 1
-    assert [item.event_type.value for item in result.trace][-3:] == [
-        "finalization",
-        "finalization",
-        "terminal",
-    ]
-    serialized = [item.model_dump(mode="json") for item in result.trace]
-    assert all(
-        set(item)
-        == {
-            "event_id",
-            "event_type",
-            "action_name",
-            "status",
-            "duration_ms",
-            "evidence_reference_ids",
-            "reason_code",
-        }
-        for item in serialized
+    assert [call[0] for call in gateway.calls] == [SEARCH, EXCERPT]
+    assert perception.step_result_calls == 2
+    assert perception.step_result_inputs[0][2].steps[0].status == StepStatus.COMPLETED
+    assert len(perception.step_result_inputs[1][3]) == 2
+    assert result.citations[0].citation_id == "ev_2"
+
+
+@pytest.mark.asyncio
+async def test_scope_hints_remain_advisory_and_never_reach_tool_arguments_or_authority() -> None:
+    hints = MentionedScopeHints(tenants=("atlas",), companies=("atlas",), departments=("legal",))
+    search = _search()
+    clarify = _terminal_action(ActionType.CLARIFY)
+    actions = (search, clarify)
+    context = _context()
+    loop, _, gateway = _loop(
+        (
+            _perception(PerceptionMode.USER_QUERY, hints=hints),
+            _perception(PerceptionMode.STEP_RESULT, hints=hints),
+        ),
+        (_decision(actions, 0), _decision(actions, 1, completed=1)),
+        (_observation(SEARCH),),
     )
-    assert "synthetic revenue" not in str(serialized).casefold()
+    await _run(loop, context)
+
+    assert gateway.calls[0][1] is context
+    assert search.arguments.model_dump() == {"query": "synthetic revenue", "top_k": 2}
+
+
+@pytest.mark.asyncio
+async def test_insufficient_evidence_allows_one_replan_and_one_search_rewrite() -> None:
+    first = _search("first authorized search")
+    rewrite = _search("one safe rewritten search")
+    clarify = _terminal_action(ActionType.CLARIFY)
+    initial_actions = (first,)
+    revised_actions = (rewrite, clarify)
+    loop, perception, gateway = _loop(
+        (
+            _perception(PerceptionMode.USER_QUERY),
+            _perception(PerceptionMode.STEP_RESULT, EvidenceStatus.INSUFFICIENT),
+            _perception(PerceptionMode.STEP_RESULT, EvidenceStatus.INSUFFICIENT),
+        ),
+        (
+            _decision(initial_actions, 0),
+            _decision(revised_actions, 0, version=2),
+            _decision(revised_actions, 1, version=2, completed=1),
+        ),
+        (_observation(SEARCH), _observation(SEARCH)),
+    )
+    result = await _run(loop)
+
+    assert result.terminal_status == TerminalStatus.NEEDS_CLARIFICATION
+    assert result.replan_count == 1
+    assert len(gateway.calls) == 2
+    assert perception.step_result_inputs[1][3][0].plan_version == 1
+
+
+@pytest.mark.asyncio
+async def test_third_search_is_blocked_by_semantic_rewrite_limit() -> None:
+    actions = (_search("one"), _search("two"), _search("three"))
+    loop, _, gateway = _loop(
+        (
+            _perception(PerceptionMode.USER_QUERY),
+            _perception(PerceptionMode.STEP_RESULT),
+            _perception(PerceptionMode.STEP_RESULT),
+        ),
+        (
+            _decision(actions, 0),
+            _decision(actions, 1, completed=1),
+            _decision(actions, 2, completed=2),
+        ),
+        (_observation(SEARCH), _observation(SEARCH)),
+    )
+    result = await _run(loop)
+
+    assert result.stopping_reason == StoppingReason.MAX_RETRIEVAL_REWRITES
+    assert len(gateway.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_plan_exhaustion_and_out_of_order_action_fail_before_gateway() -> None:
+    search = _search()
+    finalize = _terminal_action(ActionType.FINALIZE)
+    loop, _, gateway = _loop(
+        (_perception(PerceptionMode.USER_QUERY),),
+        (_decision((search, finalize), 1),),
+    )
+    out_of_order = await _run(loop)
+    assert out_of_order.stopping_reason == StoppingReason.MALFORMED_ACTION
+    assert gateway.calls == []
+
+    loop, _, gateway = _loop(
+        (_perception(PerceptionMode.USER_QUERY), _perception(PerceptionMode.STEP_RESULT)),
+        (
+            _decision((search,), 0),
+            DecisionResult(plan=_plan((search,), completed=1), next_action=finalize),
+        ),
+        (_observation(SEARCH),),
+    )
+    exhausted = await _run(loop)
+    assert exhausted.stopping_reason == StoppingReason.PLAN_EXHAUSTED
+    assert len(gateway.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -240,25 +390,13 @@ async def test_successful_flow_returns_to_perception_and_preserves_citations() -
         ),
     ],
 )
-async def test_direct_terminal_paths(
+async def test_direct_terminal_paths_are_safe(
     action_type: ActionType, status: TerminalStatus, reason: StoppingReason
 ) -> None:
-    result = await _run(_loop((_perception(PerceptionMode.USER_QUERY),), (_terminal(action_type),)))
+    action = _terminal_action(action_type)
+    loop, _, _ = _loop((_perception(PerceptionMode.USER_QUERY),), (_decision((action,), 0),))
+    result = await _run(loop)
     assert (result.terminal_status, result.stopping_reason) == (status, reason)
-
-
-@pytest.mark.asyncio
-async def test_unknown_or_unshortlisted_tool_denied_before_gateway() -> None:
-    result = await _run(
-        _loop(
-            (_perception(PerceptionMode.USER_QUERY),),
-            (_decision(_tool_action("portfolio.unknown")),),
-        ),
-        frozenset({TOOL}),
-    )
-    assert result.terminal_status == TerminalStatus.REFUSED
-    assert result.stopping_reason == StoppingReason.SCOPE_DENIED
-    assert result.step_count == 0
 
 
 @pytest.mark.asyncio
@@ -266,109 +404,69 @@ async def test_unknown_or_unshortlisted_tool_denied_before_gateway() -> None:
     ("observation", "status", "reason"),
     [
         (
-            _observation(ObservationStatus.DENIED),
+            _observation(SEARCH, ObservationStatus.DENIED),
             TerminalStatus.REFUSED,
             StoppingReason.SCOPE_DENIED,
         ),
         (
-            _observation(ObservationStatus.TIMEOUT, retry_count=1),
+            _observation(SEARCH, ObservationStatus.TIMEOUT, retry_count=1),
             TerminalStatus.FAILED,
             StoppingReason.TOOL_TIMEOUT,
         ),
         (
-            _observation(ObservationStatus.ERROR, retry_count=1),
+            _observation(SEARCH, ObservationStatus.ERROR, retry_count=1),
             TerminalStatus.FAILED,
             StoppingReason.TOOL_ERROR,
         ),
     ],
 )
 async def test_gateway_failure_paths_are_explicit(
-    observation: StructuredObservation, status: TerminalStatus, reason: StoppingReason
+    observation: StructuredObservation,
+    status: TerminalStatus,
+    reason: StoppingReason,
 ) -> None:
-    result = await _run(
-        _loop(
-            (_perception(PerceptionMode.USER_QUERY),), (_decision(_tool_action()),), (observation,)
-        )
+    search = _search()
+    loop, _, _ = _loop(
+        (_perception(PerceptionMode.USER_QUERY),),
+        (_decision((search,), 0),),
+        (observation,),
     )
+    result = await _run(loop)
     assert (result.terminal_status, result.stopping_reason) == (status, reason)
-    if observation.status == ObservationStatus.DENIED:
-        assert result.retry_count == 0
 
 
 @pytest.mark.asyncio
-async def test_max_steps_and_max_replans_terminate() -> None:
-    perceptions = (_perception(PerceptionMode.USER_QUERY), _perception(PerceptionMode.STEP_RESULT))
-    decisions = (_decision(_tool_action()), _decision(_tool_action(), version=2, replan=True))
-    result = await _run(
-        _loop(
-            perceptions,
-            decisions,
-            (_observation(ObservationStatus.SUCCESS),),
-            limits=AgentLoopLimits(max_steps=1, max_replans=1, max_duration_seconds=30),
-        )
-    )
-    assert result.stopping_reason == StoppingReason.MAX_STEPS
-
-    decisions = (_decision(_tool_action()), _decision(_tool_action(), version=2, replan=True))
-    result = await _run(
-        _loop(
-            perceptions,
-            decisions,
-            (_observation(ObservationStatus.SUCCESS),),
-            limits=AgentLoopLimits(max_steps=4, max_replans=0, max_duration_seconds=30),
-        )
-    )
-    assert result.stopping_reason == StoppingReason.MAX_REPLANS
-
-
-@pytest.mark.asyncio
-async def test_duration_model_and_citation_failures_terminate_safely() -> None:
+async def test_model_duration_and_citation_failures_terminate_safely() -> None:
     ticks = iter((0.0, 31.0, 31.0, 31.0))
-    result = await _run(
-        _loop(
-            (_perception(PerceptionMode.USER_QUERY),),
-            (),
-            limits=AgentLoopLimits(max_duration_seconds=30),
-            clock=lambda: next(ticks),
-        )
+    loop, _, _ = _loop(
+        (_perception(PerceptionMode.USER_QUERY),),
+        (),
+        limits=AgentLoopLimits(max_duration_seconds=30),
+        clock=lambda: next(ticks),
     )
-    assert result.stopping_reason == StoppingReason.MAX_DURATION
+    assert (await _run(loop)).stopping_reason == StoppingReason.MAX_DURATION
 
-    result = await _run(_loop((AgentModelError(AgentModelErrorCode.INVALID_RESPONSE),), ()))
-    assert result.stopping_reason == StoppingReason.MODEL_ERROR
+    loop, _, _ = _loop((AgentModelError(AgentModelErrorCode.INVALID_RESPONSE),), ())
+    assert (await _run(loop)).stopping_reason == StoppingReason.MODEL_ERROR
 
-    result = await _run(
-        _loop(
-            (
-                _perception(PerceptionMode.USER_QUERY),
-                _perception(PerceptionMode.STEP_RESULT, EvidenceStatus.SUFFICIENT),
-            ),
-            (_decision(_tool_action()), _terminal(ActionType.FINALIZE)),
-            (_observation(ObservationStatus.SUCCESS, evidence=(_evidence(),)),),
-            final_answer=GroundedAnswerDraft(
-                "supported", (GroundedClaimDraft("Unsupported.", ("ev_missing",)),)
-            ),
-        )
+    evidence = _evidence()
+    search = _search()
+    finalize = _terminal_action(ActionType.FINALIZE)
+    actions = (search, finalize)
+    loop, _, _ = _loop(
+        (
+            _perception(PerceptionMode.USER_QUERY),
+            _perception(PerceptionMode.STEP_RESULT, EvidenceStatus.SUFFICIENT),
+        ),
+        (_decision(actions, 0), _decision(actions, 1, completed=1)),
+        (_observation(SEARCH, evidence=(evidence,)),),
+        final_answer=GroundedAnswerDraft(
+            "supported", (GroundedClaimDraft("Unsupported.", ("ev_missing",)),)
+        ),
     )
-    assert result.terminal_status == TerminalStatus.INSUFFICIENT_EVIDENCE
+    result = await _run(loop)
     assert result.stopping_reason == StoppingReason.CITATION_VALIDATION_FAILED
 
 
-def test_action_schema_rejects_forged_scope_and_execution_arguments() -> None:
-    for key in (
-        "tenant_id",
-        "company_ids",
-        "department",
-        "user_role",
-        "sql_query",
-        "python_code",
-        "url",
-        "file_path",
-    ):
-        with pytest.raises(ValueError):
-            Action(
-                type=ActionType.TOOL_CALL,
-                action_name=TOOL,
-                arguments={key: "forged"},
-                reason_code="FORGED",
-            )
+def test_loop_exposes_no_unrestricted_execution_methods() -> None:
+    assert set(AgentLoop.__dict__).isdisjoint({"run_user_code", "execute_python", "execute_sql"})

@@ -3,13 +3,15 @@ from typing import Protocol
 
 from app.agent.models import (
     Action,
+    CompletedStep,
     DecisionResult,
     PerceptionSnapshot,
     Plan,
-    Step,
+    RemainingBudgets,
     StructuredObservation,
 )
 from app.chat.contracts import GroundedGenerationRequest, LLMGeneration
+from app.mcp_gateway.contracts import PermittedToolDescriptor
 from app.policies.models import AuthorizationContext
 
 
@@ -37,7 +39,10 @@ class PerceptionProvider(Protocol):
         *,
         query: str,
         previous: PerceptionSnapshot,
+        current_plan: Plan,
+        completed_steps: tuple[CompletedStep, ...],
         observation: StructuredObservation,
+        remaining_budgets: RemainingBudgets,
     ) -> PerceptionSnapshot: ...
 
 
@@ -50,7 +55,7 @@ class DecisionProvider(Protocol):
         *,
         query: str,
         perception: PerceptionSnapshot,
-        permitted_tools: frozenset[str],
+        permitted_tool_catalog: tuple[PermittedToolDescriptor, ...],
     ) -> DecisionResult: ...
 
     async def decide_mid_session(
@@ -59,8 +64,8 @@ class DecisionProvider(Protocol):
         query: str,
         perception: PerceptionSnapshot,
         current_plan: Plan,
-        completed_steps: tuple[Step, ...],
-        permitted_tools: frozenset[str],
+        completed_steps: tuple[CompletedStep, ...],
+        permitted_tool_catalog: tuple[PermittedToolDescriptor, ...],
     ) -> DecisionResult: ...
 
 

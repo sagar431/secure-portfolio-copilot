@@ -1,5 +1,4 @@
 import logging
-import re
 import time
 from dataclasses import dataclass
 from typing import Literal
@@ -23,6 +22,7 @@ from app.chat.repository import (
     get_owned_conversation,
     list_owned_conversations,
 )
+from app.chat.scope_guard import request_matches_authorized_scope, resolve_home_tenant_id
 from app.core.errors import APIError
 from app.models.chat import Conversation
 from app.models.identity import Capability
@@ -41,43 +41,6 @@ from app.schemas.retrieval import AuthorizedSearchResultData
 logger = logging.getLogger("app.chat.audit")
 
 INSUFFICIENT_ANSWER = "I don't have sufficient authorized evidence to answer that question."
-_TARGET_BEFORE_DOMAIN = re.compile(
-    r"\b([a-z0-9_-]+)(?:'s)?\s+"
-    r"(?:finance|financial|legal|company|portfolio|documents?|data)\b",
-    re.IGNORECASE,
-)
-_TARGET_BEFORE_METRIC = re.compile(
-    r"(?:^|\bwhat\s+(?:was|is)|\bwhy\s+did|\bshow\s+me|\bsummarize)\s+"
-    r"([a-z0-9_-]+)(?:'s)?\s+"
-    r"(?:revenue|ebitda|margin|agreement|contract|board)\b",
-    re.IGNORECASE,
-)
-_TARGET_AFTER_PREPOSITION = re.compile(r"\b(?:for|from|about|at)\s+([a-z0-9_-]+)\b", re.IGNORECASE)
-_TARGET_STOP_WORDS = {
-    "authorized",
-    "company",
-    "document",
-    "documents",
-    "ebitda",
-    "evidence",
-    "financial",
-    "gross",
-    "is",
-    "legal",
-    "margin",
-    "me",
-    "my",
-    "net",
-    "operating",
-    "of",
-    "our",
-    "portfolio",
-    "revenue",
-    "the",
-    "this",
-    "was",
-    "were",
-}
 
 
 class GroundingValidationError(ValueError):
@@ -89,13 +52,6 @@ class _ValidatedAnswer:
     claims: tuple[GroundedClaimData, ...]
     citations: tuple[GroundedCitationData, ...]
     limitations: tuple[str, ...]
-
-
-def _home_tenant_id(context: AuthorizationContext) -> UUID:
-    tenant_ids = {grant.home_tenant_id for grant in context.scope.grants}
-    if len(tenant_ids) != 1:
-        raise APIError(403, "forbidden", "Conversation access is not permitted.")
-    return next(iter(tenant_ids))
 
 
 def _conversation_data(conversation: Conversation) -> ConversationData:
@@ -187,38 +143,6 @@ def validate_grounded_answer(
     return _ValidatedAnswer(tuple(claims), citations, limitations)
 
 
-def _request_matches_scope(context: AuthorizationContext, question: str) -> bool:
-    query_tokens = set(re.findall(r"[a-z0-9_-]+", question.casefold()))
-    authorized_departments = {
-        department.key.casefold()
-        for grant in context.scope.grants
-        if Capability.QUERY_DOCUMENTS in grant.capabilities
-        for department in grant.departments
-    }
-    requested_departments = query_tokens.intersection({"finance", "legal", "shared"})
-    if not requested_departments.issubset(authorized_departments):
-        return False
-    authorized_targets = {
-        token
-        for grant in context.scope.grants
-        if Capability.QUERY_DOCUMENTS in grant.capabilities
-        for value in (grant.workspace_slug, *grant.company_slugs)
-        for token in (value.casefold(), value.casefold().split("-", 1)[0])
-    }
-    target_hints = {
-        match.group(1).casefold()
-        for pattern in (
-            _TARGET_BEFORE_DOMAIN,
-            _TARGET_BEFORE_METRIC,
-            _TARGET_AFTER_PREPOSITION,
-        )
-        for match in pattern.finditer(question)
-        if match.group(1).casefold() not in _TARGET_STOP_WORDS
-        and not re.fullmatch(r"fy\d{4}", match.group(1), re.IGNORECASE)
-    }
-    return not target_hints or target_hints.issubset(authorized_targets)
-
-
 def _sufficient_results(
     results: tuple[AuthorizedSearchResultData, ...],
 ) -> tuple[AuthorizedSearchResultData, ...]:
@@ -247,7 +171,7 @@ class GroundedChatService:
     async def create(
         self, context: AuthorizationContext, *, title: str | None
     ) -> CreatedConversationData:
-        tenant_id = _home_tenant_id(context)
+        tenant_id = resolve_home_tenant_id(context)
         conversation = await create_conversation(
             self.session,
             tenant_id=tenant_id,
@@ -258,7 +182,7 @@ class GroundedChatService:
         return CreatedConversationData(conversation=_conversation_data(conversation))
 
     async def list(self, context: AuthorizationContext) -> ConversationListData:
-        tenant_id = _home_tenant_id(context)
+        tenant_id = resolve_home_tenant_id(context)
         conversations = await list_owned_conversations(
             self.session,
             tenant_id=tenant_id,
@@ -277,7 +201,7 @@ class GroundedChatService:
         request_id: str,
     ) -> GroundedMessageData:
         started = time.monotonic()
-        tenant_id = _home_tenant_id(context)
+        tenant_id = resolve_home_tenant_id(context)
         conversation = await get_owned_conversation(
             self.session,
             conversation_id=conversation_id,
@@ -299,7 +223,7 @@ class GroundedChatService:
             content=question,
             request_id=request_id,
         )
-        if not _request_matches_scope(context, question):
+        if not request_matches_authorized_scope(context, question):
             return await self._persist_answer(
                 context=context,
                 conversation=conversation,

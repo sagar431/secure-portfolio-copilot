@@ -1,9 +1,9 @@
-# Step 7 Testing Guide
+# Step 8 Testing Guide
 
 Run commands from the locations shown. Tests use only synthetic identities and an isolated tmpfs
-PostgreSQL test service. On 2026-08-21 these commands passed with 236 backend tests and 88
+PostgreSQL test service. On 2026-08-21 these commands passed with 263 backend tests and 88
 frontend tests. Automated tests configure deterministic fake embedding, LLM, Perception, Decision,
-and MCP adapters and require neither Ollama, Gemini, a Gemini key, nor network access.
+and MCP adapters and require neither Ollama, a live model provider, a provider key, nor network access.
 
 ## Backend quality checks
 
@@ -34,12 +34,14 @@ serialization, insufficient evidence, citation completeness/reconstruction/failu
 and provider/log redaction.
 PostgreSQL-backed tests refuse any database not named `portfolio_test`.
 
-Step 7 coverage adds strict Perception/Decision schemas, one-action/plan matching, every explicit
-terminal path, step/replan/rewrite/duration limits, unflagged-plan-change counting, host-only scope,
-request-specific catalog filtering, startup manifest drift, unknown/unshortlisted tools, SDK
-coercion rejection, forged scope keys, malformed input/output, timeout/transient/permanent/denial
-retry behavior, real authorized excerpt provenance, official in-process MCP structured output,
-prompt injection, trace smuggling/redaction, and final citation preservation.
+Step 7 coverage adds request-specific MCP catalog filtering, startup manifest drift,
+unknown/unshortlisted tools, SDK coercion rejection, forged scope keys, malformed input/output,
+timeout/transient/permanent/denial retry behavior, real authorized excerpt provenance, and official
+in-process MCP structured output. Step 8 coverage adds bounded typed Perception, safe step-result
+inputs, manifest-derived Decision descriptors, provider-schema derivation, exact per-tool actions,
+versioned plan text, first-pending-step order, immutable completed history, replay prevention, every
+explicit terminal path, step/replan/rewrite/duration limits, unflagged-plan-change counting, prompt
+injection, trace smuggling/redaction, and final citation preservation.
 
 ## Frontend quality checks
 
@@ -67,7 +69,7 @@ loading/cancellation, insufficient evidence, denial, timeout, generic error, and
 rejection. Backend integration tests provide measured retrieval/chat behavior; UI fixtures verify
 presentation only.
 
-Step 7 frontend coverage adds the explicit agent submit mode, bounded loading/cancellation, strict
+Step 8 frontend coverage adds the explicit agent submit mode, bounded loading/cancellation, strict
 agent envelope/terminal invariants, completed-only citation graphs, sanitized timeline rendering,
 evidence drawer links, and rejection of extra sensitive keys, non-UUID event IDs, non-`ev_N`
 references, non-approved action names, and non-allow-listed reason/stopping codes.
@@ -94,12 +96,12 @@ npm run test -- --run \
 
 These checks use only fake providers. They prove call ordering and boundary behavior: retrieval
 precedes generation; missing capability and recognizable cross-scope targets call neither provider;
-document injection remains quoted untrusted JSON; Gemini configuration has no tools and medium
-thinking with thoughts excluded; a transient failure gets no more than one retry; citations are
+document injection remains quoted untrusted JSON; provider configuration has no tools; a transient,
+malformed, or incomplete Kimi response gets no more than one retry; citations are
 rebuilt only from retrieved provenance; malformed/fabricated references abstain; and logs do not
 contain key, question, excerpt, prompt, answer, provider body, or reasoning markers.
 
-## Focused Step 7 checks
+## Focused Steps 7 and 8 checks
 
 Run the deterministic orchestration, MCP, security, database integration, and UI groups directly:
 
@@ -179,8 +181,8 @@ The final index list must include `ix_document_chunks_embedding_status` and the 
 must restore all three, their indexes, foreign keys, the `user|assistant` message-role check, and the
 `grounded|insufficient_evidence|provider_error` trace-status check. Both drift checks must report no
 new upgrade operations. The verified checkpoint completed this full cycle successfully.
-Step 7 adds no Alembic revision, so the identical `0006 -> 0005 -> 0006` cycle is the cumulative
-Step 7 migration gate.
+Steps 7 and 8 add no Alembic revision, so the identical `0006 -> 0005 -> 0006` cycle is their
+cumulative migration gate.
 
 ## Live Ollama provider check
 
@@ -202,70 +204,31 @@ Then start the backend with `EMBEDDING_PROVIDER=ollama`. A non-loopback, HTTPS, 
 query-bearing, or fragment-bearing `OLLAMA_BASE_URL` must fail settings validation. Do not use the
 fake provider to claim live-model retrieval quality.
 
-## Live Gemini provider check
+## Live Runpod Kimi provider check
 
-This is separate from automated tests. Put `GEMINI_API_KEY` only in the ignored root `.env`; never
-place it in a command, argument, shell variable, log statement, test fixture, or captured artifact.
-The settings must retain `LLM_PROVIDER=gemini`, `LLM_MODEL_NAME=gemini-3.7-flash`, and
-`LLM_THINKING_LEVEL=medium`.
+This is separate from automated tests. Put `RUNPOD_API_KEY` only in the ignored root `.env`; never
+place it in a command, argument, log statement, test fixture, or captured artifact. Settings must
+retain `LLM_PROVIDER=runpod`, the exact base URL
+`https://api.runpod.ai/v2/moonshot-kimi/openai/v1`, model `kimi-k3`, and at least 1,024 output tokens.
 
-Run this minimal provider-contract smoke from `backend`. It uses only synthetic evidence and prints
-only status/citation/retry metadata—not the key, question, prompt, evidence, answer, token counts, or
-reasoning:
+Run the checked-in content-free contract smoke from `backend`:
 
 ```bash
-cd backend
-uv run python - <<'PY'
-import asyncio
-from uuid import uuid4
-
-from app.chat.contracts import GroundedEvidence, GroundedGenerationRequest
-from app.chat.factory import create_llm_provider
-from app.core.config import Settings
-
-
-async def main() -> None:
-    settings = Settings()
-    provider = create_llm_provider(settings)
-    request = GroundedGenerationRequest(
-        question="What value does the synthetic authorized evidence report?",
-        evidence=(
-            GroundedEvidence(
-                evidence_id="ev_1",
-                chunk_id=uuid4(),
-                document_id=uuid4(),
-                document_version_id=uuid4(),
-                version_number=1,
-                document_title="synthetic.pdf",
-                excerpt="The synthetic authorized value is 125.",
-                page_number=1,
-                sheet_name=None,
-                row_start=None,
-                row_end=None,
-                cell_start=None,
-                cell_end=None,
-            ),
-        ),
-    )
-    result = await provider.generate(request)
-    cited = bool(result.answer.claims) and all(
-        claim.evidence_ids and set(claim.evidence_ids) <= {"ev_1"}
-        for claim in result.answer.claims
-    )
-    print(f"status={result.answer.status}")
-    print(f"cited_claim_count={len(result.answer.claims)}")
-    print(f"claims_cited={str(cited).lower()}")
-    print(f"retry_count={result.usage.retry_count}")
-
-
-asyncio.run(main())
-PY
+uv run python -m app.scripts.live_runpod_kimi_smoke
 ```
 
-The verified 2026-08-21 run returned `status=supported`, `cited_claim_count=1`,
-`claims_cited=true`, and `retry_count=0`. This proves live SDK/model connectivity and the structured
-citation-reference contract for one synthetic case. It does not prove broad answer faithfulness,
-latency, cost, or availability. Never substitute fake-provider output for this live gate.
+It exercises initial Perception and Decision, feeds a synthetic successful authorized observation
+through step-result Perception and mid-session Decision, then runs grounded finalization. It prints
+only provider/model identifiers, enum metadata, plan/claim counts, citation validity, and retry
+count—never the key, question, prompts, evidence, answer text, token counts, provider body, or
+`reasoning_content`.
+
+The verified 2026-08-21 run returned valid financial Perception, a valid two-step Decision selecting
+`portfolio.search_authorized_documents`, sufficient step-result Perception, a valid mid-session
+`FINALIZE`, and `final_status=supported` with one cited claim, `final_claims_cited=true`, and
+`final_retry_count=0`. This proves live endpoint/model connectivity and both modes of the structured
+stages plus finalization for one synthetic case. It does not prove broad faithfulness, latency,
+cost, or availability. Never substitute fake output for this live gate.
 
 ## Live smoke test
 
@@ -433,10 +396,10 @@ Expected results:
 2. The unsupported topic is `insufficient_evidence`, with the controlled answer and no claims or
    citations.
 3. The explicit Orion Legal and Atlas targets abstain with no claims/citations. Focused tests prove
-   these recognizable targets call neither retrieval nor Gemini.
+   these recognizable targets call neither retrieval nor the model.
 4. Leo cannot post to Alice's conversation and receives the same safe 404 as a random UUID. Nora
    receives 403 for her own conversation message because she lacks `QUERY_DOCUMENTS`, before
-   retrieval or Gemini.
+   retrieval or the model.
 
 In `/chat`, confirm the owned list, new/automatic conversation creation, suggestions, bounded
 composer, loading indicator, cancel button/state, insufficient-evidence card, safe denial/timeout/
@@ -523,8 +486,8 @@ refresh.
   Do not weaken authorization, relevance, provenance, or citation checks to force an answer.
 - Chat returns `llm_timeout`/HTTP 504: check safe request/trace metadata and local connectivity. Do
   not log the key, prompt, question, evidence, provider body, answer, or reasoning.
-- Chat returns `llm_unavailable`/HTTP 503: confirm the ignored `.env` selects Gemini and has a local
-  key, then rerun only the minimal synthetic provider smoke. The service intentionally has no
+- Chat returns `llm_unavailable`/HTTP 503: confirm the ignored `.env` selects Runpod and has a local
+  key, then rerun only the content-free synthetic provider smoke. The service intentionally has no
   partial answer or alternate ungrounded fallback.
 - A conversation remains after reload but its transcript is empty: this is the honest Step 6 API
   limitation. Conversation/message persistence exists, but message-history retrieval and memory do

@@ -7,6 +7,12 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.runpod_kimi import (
+    RUNPOD_KIMI_BASE_URL,
+    RUNPOD_KIMI_MIN_OUTPUT_TOKENS,
+    RUNPOD_KIMI_MODEL,
+)
+
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
@@ -39,10 +45,13 @@ class Settings(BaseSettings):
     embedding_max_chunks: int = Field(default=512, ge=1, le=2048)
     embedding_timeout_seconds: float = Field(default=30.0, ge=1.0, le=120.0)
     embedding_operation_timeout_seconds: float = Field(default=120.0, ge=1.0, le=300.0)
-    llm_provider: Literal["gemini", "fake", "disabled"] = "gemini"
+    llm_provider: Literal["gemini", "runpod", "fake", "disabled"] = "gemini"
     gemini_api_key: SecretStr | None = None
     llm_model_name: str = "gemini-3.7-flash"
     llm_thinking_level: str = "medium"
+    runpod_api_key: SecretStr | None = None
+    runpod_base_url: str = RUNPOD_KIMI_BASE_URL
+    runpod_model_name: str = RUNPOD_KIMI_MODEL
     llm_timeout_seconds: float = Field(default=30.0, ge=1.0, le=60.0)
     llm_max_output_tokens: int = Field(default=1024, ge=256, le=2048)
     llm_max_evidence_chunks: int = Field(default=5, ge=1, le=10)
@@ -65,10 +74,18 @@ class Settings(BaseSettings):
             raise ValueError("EMBEDDING_MODEL_VERSION must be v1.5")
         if self.embedding_dimensions != 768:
             raise ValueError("EMBEDDING_DIMENSIONS must be 768")
-        if self.llm_model_name != "gemini-3.7-flash":
-            raise ValueError("LLM_MODEL_NAME must be gemini-3.7-flash")
-        if self.llm_thinking_level != "medium":
-            raise ValueError("LLM_THINKING_LEVEL must be medium")
+        if self.llm_provider == "gemini":
+            if self.llm_model_name != "gemini-3.7-flash":
+                raise ValueError("LLM_MODEL_NAME must be gemini-3.7-flash")
+            if self.llm_thinking_level != "medium":
+                raise ValueError("LLM_THINKING_LEVEL must be medium")
+        if self.llm_provider == "runpod":
+            if self.runpod_base_url != RUNPOD_KIMI_BASE_URL:
+                raise ValueError("RUNPOD_BASE_URL must be the approved Kimi endpoint")
+            if self.runpod_model_name != RUNPOD_KIMI_MODEL:
+                raise ValueError("RUNPOD_MODEL_NAME must be kimi-k3")
+            if self.llm_max_output_tokens < RUNPOD_KIMI_MIN_OUTPUT_TOKENS:
+                raise ValueError("Runpod Kimi requires at least 1024 output tokens")
         if self.app_env == "production" and self.embedding_provider != "disabled":
             raise ValueError("Development embedding providers are unavailable in production")
         if self.app_env == "production" and self.llm_provider == "fake":
@@ -79,6 +96,12 @@ class Settings(BaseSettings):
             and self.gemini_api_key is None
         ):
             raise ValueError("GEMINI_API_KEY must be configured for the Gemini provider")
+        if (
+            self.app_env == "production"
+            and self.llm_provider == "runpod"
+            and self.runpod_api_key is None
+        ):
+            raise ValueError("RUNPOD_API_KEY must be configured for the Runpod provider")
         parsed_ollama = urlsplit(self.ollama_base_url)
         hostname = parsed_ollama.hostname
         is_loopback = hostname == "localhost"

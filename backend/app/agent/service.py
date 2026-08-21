@@ -14,7 +14,7 @@ from app.agent.models import (
     TraceStatus,
 )
 from app.chat.repository import add_message, add_trace, get_owned_conversation
-from app.chat.service import _home_tenant_id, _request_matches_scope
+from app.chat.scope_guard import request_matches_authorized_scope, resolve_home_tenant_id
 from app.core.errors import APIError
 from app.mcp_gateway.contracts import APPROVED_TOOL_NAMES
 from app.mcp_gateway.gateway import ApprovedToolGateway
@@ -98,7 +98,7 @@ class AgentRunService:
         request_id: str,
     ) -> AgentRunMessageData:
         started = time.monotonic()
-        tenant_id = _home_tenant_id(context)
+        tenant_id = resolve_home_tenant_id(context)
         conversation = await get_owned_conversation(
             self._session,
             conversation_id=conversation_id,
@@ -120,18 +120,17 @@ class AgentRunService:
             content=question,
             request_id=request_id,
         )
-        if not _request_matches_scope(context, question):
+        if not request_matches_authorized_scope(context, question):
             outcome = self._scope_denied_outcome()
         else:
-            permitted_tools = frozenset(
-                item.value
-                for item in self._gateway.authorized_catalog(context.scope, APPROVED_TOOL_NAMES)
+            permitted_tool_catalog = self._gateway.permitted_catalog(
+                context.scope, APPROVED_TOOL_NAMES
             )
             try:
                 outcome = await self._loop.run(
                     query=question,
                     authorization_context=context,
-                    permitted_tools=permitted_tools,
+                    permitted_tool_catalog=permitted_tool_catalog,
                     request_id=request_id,
                 )
             except Exception:

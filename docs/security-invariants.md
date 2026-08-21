@@ -1,4 +1,4 @@
-# Step 7 Security Invariants
+# Step 8 Security Invariants
 
 These rules apply now and must remain true as later milestones are approved.
 
@@ -139,7 +139,7 @@ These rules apply now and must remain true as later milestones are approved.
     retrieval or generation. Missing capability returns a generic denial before either provider is
     called.
 54. **Recognizable scope denial before retrieval.** Explicit tenant/company/department target hints
-    outside the current query grants produce an abstention without retrieval or Gemini. This
+    outside the current query grants produce an abstention without retrieval or a model call. This
     conservative heuristic is defense in depth; it never replaces Step 5 SQL authorization.
 55. **Authorized retrieval before prompting.** Every evidence row must come from
     `AuthorizedSearchService` under the current immutable `AuthorizationContext`. Authorization and
@@ -150,16 +150,17 @@ These rules apply now and must remain true as later milestones are approved.
 57. **Documents are untrusted data.** Evidence is JSON-serialized under an explicit untrusted-data
     label. The system instruction requires ignoring embedded instructions, policies, role changes,
     prompt text, URLs, files, tools, web search, code execution, and hidden assumptions.
-58. **No Gemini tools.** The official Google GenAI request supplies neither `tools` nor
-    `tool_config`. It enables no web/file search, URL access, function call, computer use, or code
-    execution. Medium thinking excludes thoughts from the response.
+58. **No model tools.** Neither the Gemini nor Runpod Kimi request configures tools, web/file
+    search, URL access, function calls, computer use, or code execution. Kimi
+    `reasoning_content` is deleted at the transport boundary and never propagated.
 59. **Bounded provider call.** Question length, evidence count, excerpt size, output tokens, timeout,
-    response schema, candidate count, and temperature are bounded. SDK attempts equal one; only a
-    transient failure may receive one application retry. Authorization denials never retry.
+    response schema, candidate count, and temperature are bounded. Kimi uses its required exact
+    temperature `1` and at least 1,024 output tokens. A transient, malformed, or incomplete response
+    may receive one retry inside a two-call total budget. Authorization denials never retry.
 60. **Provider output is untrusted.** Structured output is locally validated. Unsupported status,
     empty claims, oversized/empty claim text, missing references, unknown evidence IDs, duplicate
     evidence identity, or invalid response shape fails closed.
-61. **Host-owned citations.** Gemini returns evidence references, not trusted citation DTOs. The
+61. **Host-owned citations.** The model returns evidence references, not trusted citation DTOs. The
     backend reconstructs title, document/version/chunk IDs, version, excerpt, and page or
     sheet/row/cell location exclusively from the retrieved evidence map.
 62. **Complete claim references.** Every returned grounded claim has at least one retrieved evidence
@@ -210,10 +211,9 @@ These rules apply now and must remain true as later milestones are approved.
 77. **Structured safe observations.** Successful observations carry only schema-valid authorized
     evidence. Denied/failed observations carry no evidence or raw error. Host IDs replace
     model-controlled evidence identity before finalization.
-78. **Separate constrained model stages.** Perception and Decision are separate structured Gemini
-    calls with medium thinking, thoughts excluded, timeout/output bounds, at most one transient
-    provider retry, and no tools/search/code/files/URLs. Strict local models reject coercion and
-    extra fields.
+78. **Separate constrained model stages.** Perception and Decision are separate structured provider
+    calls with timeout/output bounds, one bounded retry, and no tools/search/code/files/URLs. Strict
+    local models reject coercion and extra fields; hidden Kimi reasoning is discarded.
 79. **Citation finalization preserved.** Only `completed` can contain claims/citations. The Step 6
     host validator requires every claim ID to exist in authorized observation evidence and rebuilds
     exact document/version/chunk and source provenance.
@@ -221,11 +221,21 @@ These rules apply now and must remain true as later milestones are approved.
     stages/statuses, two approved tool names, `ev_N` evidence IDs, bounded durations/counters, and
     explicit reason/stopping allowlists. Model reason codes, query, prompts, plan, arguments, scope,
     evidence text, answers, paths, errors, secrets, and reasoning are excluded.
-81. **No new persistence surface.** The detailed Step 7 timeline is response-only. Existing messages
+81. **No new persistence surface.** The detailed Step 8 timeline is response-only. Existing messages
     intentionally store conversation text; metadata traces store only safe IDs/status/counts. There
     is no global/unscoped memory.
-82. **No later capabilities.** Step 7 has no financial calculation tool, memory, sandbox, arbitrary
-    execution, remote/dynamic MCP, multi-agent design, cloud deployment, or Step 8 behavior.
+82. **Perception never becomes authority.** Typed entities and mentioned tenant/company/department
+    hints are untrusted language observations. They never become scope, grants, policy input, tool
+    arguments, or database filters. Step-result prompts exclude identity, grants, scope, secrets,
+    raw errors, and paths.
+83. **Manifest-derived Decision catalog.** Decision receives only the capability-filtered projection
+    of the trusted MCP manifest: approved name, purpose, exact tool-specific input schema, and safe
+    result description. It receives no identity, scope, implementation detail, or unrestricted tool.
+84. **Host-owned plan progression.** Initial plans use version 1; changed plans increment exactly one;
+    completed history is immutable; the next action matches the first pending step; completed actions
+    cannot replay; and host comparison, not the model flag, consumes the one-replan budget.
+85. **No later capabilities.** Steps 7 and 8 have no financial calculation tool, memory, sandbox,
+    arbitrary execution, remote/dynamic MCP, multi-agent design, cloud deployment, or Step 9 behavior.
 
 Automated tests cover password/token primitives, exact seeded scopes, policy reason codes, generic
 login errors, forged fields, malformed/expired/wrong-issuer/wrong-audience/wrong-signature tokens,
@@ -237,11 +247,12 @@ approved-only creation, atomic replacement, rejection/deletion, mandatory reposi
 six-user isolation, forged search values, query/result/excerpt bounds, safe audit/logging,
 provider/model validation, bounded batching, production/provider isolation, authorization-before-
 vector SQL construction, embedding invalidation/backfill, citation response validation,
-conversation ownership, authorization-before-prompting, scope preflight, prompt injection, Gemini
-no-tool/bound/retry behavior, fake-provider grounded answers, citation reconstruction and failure,
-sanitized trace/log behavior, and all chat UI states. Step 7 adds adversarial action/gateway/MCP,
+conversation ownership, authorization-before-prompting, scope preflight, prompt injection,
+provider no-tool/bound/retry behavior, fake-provider grounded answers, citation reconstruction and failure,
+sanitized trace/log behavior, and all chat UI states. Steps 7 and 8 add adversarial action/gateway/MCP,
 strict schema, startup catalog, timeout/retry/denial, loop-limit/replan/rewrite, prompt-injection,
-trace-smuggling, evidence/citation, real excerpt, and agent UI tests. Final verification passes 236
+typed perception/catalog, plan-version/order/history/replay, trace-smuggling, evidence/citation,
+real excerpt, and agent UI tests. Final verification passes 263
 backend and 88 frontend tests, migration `0006` downgrade/re-upgrade/drift checks, live Ollama and
-minimal synthetic Gemini/MCP smokes, production/integrity gates, and the zero-vulnerability
-frontend audit.
+local MCP smoke, production/integrity gates, and the zero-vulnerability frontend audit. Live Runpod
+Kimi Perception, typed-catalog Decision, and grounded finalization pass.

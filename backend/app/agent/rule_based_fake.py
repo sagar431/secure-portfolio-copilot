@@ -1,15 +1,22 @@
 from app.agent.models import (
     Action,
     ActionType,
+    CompletedStep,
     DecisionResult,
     EvidenceStatus,
     GoalStatus,
+    PerceptionEntities,
+    PerceptionIntent,
     PerceptionMode,
     PerceptionSnapshot,
     Plan,
+    RemainingBudgets,
+    RequiredEvidence,
+    ResultRequirement,
     Step,
     StructuredObservation,
 )
+from app.mcp_gateway.contracts import PermittedToolDescriptor, SearchAuthorizedDocumentsInput
 
 SEARCH_TOOL = "portfolio.search_authorized_documents"
 
@@ -20,12 +27,26 @@ class RuleBasedFakeAgentProvider:
     model_name = "fake-agent-stages-v1"
 
     async def perceive_user_query(self, *, query: str) -> PerceptionSnapshot:
-        del query
+        normalized = query.casefold()
+        if "calculate" in normalized or "margin" in normalized:
+            intent = PerceptionIntent.CALCULATION_REQUIRED
+            required_evidence = (RequiredEvidence.CALCULATION_INPUTS,)
+        elif "legal" in normalized or "contract" in normalized:
+            intent = PerceptionIntent.LEGAL_LOOKUP
+            required_evidence = (RequiredEvidence.LEGAL_DOCUMENT,)
+        elif "compare" in normalized:
+            intent = PerceptionIntent.PORTFOLIO_COMPARISON
+            required_evidence = (RequiredEvidence.COMPARISON_DOCUMENTS,)
+        else:
+            intent = PerceptionIntent.FINANCIAL_LOOKUP
+            required_evidence = (RequiredEvidence.FINANCIAL_DOCUMENT,)
         return PerceptionSnapshot(
             mode=PerceptionMode.USER_QUERY,
-            intent="document_lookup",
+            intent=intent,
             domain="portfolio_documents",
-            result_requirement="grounded_answer",
+            entities=PerceptionEntities(),
+            result_requirement=ResultRequirement.GROUNDED_ANSWER,
+            required_evidence=required_evidence,
             required_capabilities=("QUERY_DOCUMENTS",),
             evidence_status=EvidenceStatus.NONE,
             local_goal_status=GoalStatus.PENDING,
@@ -39,15 +60,21 @@ class RuleBasedFakeAgentProvider:
         *,
         query: str,
         previous: PerceptionSnapshot,
+        current_plan: Plan,
+        completed_steps: tuple[CompletedStep, ...],
         observation: StructuredObservation,
+        remaining_budgets: RemainingBudgets,
     ) -> PerceptionSnapshot:
-        del query, previous
+        del query, current_plan, completed_steps, remaining_budgets
         sufficient = bool(observation.evidence)
         return PerceptionSnapshot(
             mode=PerceptionMode.STEP_RESULT,
-            intent="document_lookup",
+            intent=previous.intent,
             domain="portfolio_documents",
-            result_requirement="grounded_answer",
+            entities=previous.entities,
+            mentioned_scope_hints=previous.mentioned_scope_hints,
+            result_requirement=previous.result_requirement,
+            required_evidence=previous.required_evidence,
             required_capabilities=("QUERY_DOCUMENTS",),
             evidence_status=(
                 EvidenceStatus.SUFFICIENT if sufficient else EvidenceStatus.INSUFFICIENT
@@ -63,18 +90,39 @@ class RuleBasedFakeAgentProvider:
         *,
         query: str,
         perception: PerceptionSnapshot,
-        permitted_tools: frozenset[str],
+        permitted_tool_catalog: tuple[PermittedToolDescriptor, ...],
     ) -> DecisionResult:
         del perception
-        if SEARCH_TOOL not in permitted_tools:
+        if SEARCH_TOOL not in {item.name.value for item in permitted_tool_catalog}:
             return self._terminal(ActionType.REFUSE, version=1)
         action = Action(
             type=ActionType.TOOL_CALL,
             action_name=SEARCH_TOOL,
-            arguments={"query": query, "top_k": 5},
+            arguments=SearchAuthorizedDocumentsInput(query=query, top_k=5),
             reason_code="SEARCH_AUTHORIZED_EVIDENCE",
         )
-        return self._decision(action, version=1)
+        finalize = Action(type=ActionType.FINALIZE, reason_code="FINALIZE_GROUNDED_ANSWER")
+        return DecisionResult(
+            plan=Plan(
+                version=1,
+                plan_text=("Search authorized documents.", "Finalize from validated evidence."),
+                steps=(
+                    Step(
+                        step_index=0,
+                        action_type=action.type,
+                        action_name=action.action_name,
+                        reason_code=action.reason_code,
+                    ),
+                    Step(
+                        step_index=1,
+                        action_type=finalize.type,
+                        reason_code=finalize.reason_code,
+                    ),
+                ),
+                change_reason_code="PLAN_CREATED",
+            ),
+            next_action=action,
+        )
 
     async def decide_mid_session(
         self,
@@ -82,22 +130,26 @@ class RuleBasedFakeAgentProvider:
         query: str,
         perception: PerceptionSnapshot,
         current_plan: Plan,
-        completed_steps: tuple[Step, ...],
-        permitted_tools: frozenset[str],
+        completed_steps: tuple[CompletedStep, ...],
+        permitted_tool_catalog: tuple[PermittedToolDescriptor, ...],
     ) -> DecisionResult:
-        del query, current_plan, completed_steps, permitted_tools
+        del query, completed_steps, permitted_tool_catalog
         action_type = (
             ActionType.FINALIZE
             if perception.evidence_status == EvidenceStatus.SUFFICIENT
             else ActionType.CLARIFY
         )
-        return self._terminal(action_type, version=2)
+        action = Action(type=action_type, reason_code=f"{action_type.value}_CONTROLLED")
+        if action_type == ActionType.FINALIZE:
+            return DecisionResult(plan=current_plan, next_action=action)
+        return self._terminal(action_type, version=current_plan.version + 1)
 
     @staticmethod
     def _decision(action: Action, *, version: int) -> DecisionResult:
         return DecisionResult(
             plan=Plan(
                 version=version,
+                plan_text=(f"Perform controlled {action.type.value.casefold()}.",),
                 steps=(
                     Step(
                         step_index=0,

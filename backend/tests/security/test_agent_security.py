@@ -16,18 +16,25 @@ from app.agent.gemini import GeminiPerceptionProvider
 from app.agent.loop import AgentLoop
 from app.agent.models import (
     Action,
-    ActionArgument,
     ActionType,
     AgentLoopLimits,
     AgentRunOutcome,
     DecisionResult,
     EvidenceStatus,
     GoalStatus,
+    MentionedScopeHints,
     ObservationStatus,
+    PerceptionEntities,
+    PerceptionIntent,
     PerceptionMode,
+    PerceptionRiskFlag,
     PerceptionSnapshot,
     Plan,
+    RemainingBudgets,
+    RequiredEvidence,
+    ResultRequirement,
     Step,
+    StepStatus,
     StoppingReason,
     StructuredObservation,
     TerminalStatus,
@@ -35,8 +42,13 @@ from app.agent.models import (
 from app.agent.prompts import PERCEPTION_SYSTEM_INSTRUCTION, step_result_perception_prompt
 from app.chat.contracts import GroundedEvidence
 from app.chat.fake import DeterministicFakeLLMProvider
-from app.mcp_gateway.contracts import ApprovedToolName, SearchAuthorizedDocumentsInput
+from app.mcp_gateway.contracts import (
+    ApprovedToolName,
+    GetDocumentExcerptInput,
+    SearchAuthorizedDocumentsInput,
+)
 from app.mcp_gateway.errors import ToolAuthorizationError, ToolTransientError
+from app.mcp_gateway.gateway import ApprovedToolGateway
 from app.models.identity import Capability, GrantSource
 from app.policies.models import (
     AuthorizationContext,
@@ -83,10 +95,14 @@ def _context() -> AuthorizationContext:
 def _perception(mode: PerceptionMode) -> PerceptionSnapshot:
     return PerceptionSnapshot(
         mode=mode,
-        intent="document_lookup",
+        intent=PerceptionIntent.FINANCIAL_LOOKUP,
         domain="portfolio_documents",
-        result_requirement="grounded_answer",
+        entities=PerceptionEntities(financial_metrics=("revenue",)),
+        mentioned_scope_hints=MentionedScopeHints(),
+        result_requirement=ResultRequirement.GROUNDED_ANSWER,
+        required_evidence=(RequiredEvidence.FINANCIAL_DOCUMENT,),
         required_capabilities=("QUERY_DOCUMENTS",),
+        risk_flags=(PerceptionRiskFlag.PROMPT_INJECTION,),
         evidence_status=EvidenceStatus.NONE,
         local_goal_status=(
             GoalStatus.PENDING if mode == PerceptionMode.USER_QUERY else GoalStatus.ADVANCED
@@ -98,10 +114,10 @@ def _perception(mode: PerceptionMode) -> PerceptionSnapshot:
 
 
 def _action(tool_name: str) -> Action:
-    arguments: dict[str, ActionArgument] = (
-        {"query": "authorized evidence", "top_k": 2}
+    arguments = (
+        SearchAuthorizedDocumentsInput(query="authorized evidence", top_k=2)
         if tool_name == SEARCH_TOOL
-        else {"document_id": str(uuid4()), "chunk_id": str(uuid4())}
+        else GetDocumentExcerptInput(document_id=uuid4(), chunk_id=uuid4())
     )
     return Action(
         type=ActionType.TOOL_CALL,
@@ -111,17 +127,27 @@ def _action(tool_name: str) -> Action:
     )
 
 
-def _decision(action: Action, version: int) -> DecisionResult:
+def _decision(
+    action: Action,
+    version: int,
+    *,
+    actions: tuple[Action, ...] | None = None,
+    completed: int = 0,
+) -> DecisionResult:
+    actions = actions or (action,)
     return DecisionResult(
         plan=Plan(
             version=version,
-            steps=(
+            plan_text=tuple(f"Bounded step {index}." for index in range(len(actions))),
+            steps=tuple(
                 Step(
-                    step_index=0,
-                    action_type=action.type,
-                    action_name=action.action_name,
-                    reason_code="BOUNDED_STEP",
-                ),
+                    step_index=index,
+                    action_type=item.type,
+                    action_name=item.action_name,
+                    status=StepStatus.COMPLETED if index < completed else StepStatus.PENDING,
+                    reason_code="TOOL_COMPLETED" if index < completed else "BOUNDED_STEP",
+                )
+                for index, item in enumerate(actions)
             ),
             change_reason_code="PLAN_CREATED",
         ),
@@ -147,19 +173,56 @@ def _loop(
     limits: AgentLoopLimits,
     change_plans: bool = False,
 ) -> tuple[AgentLoop, DeterministicFakeGateway]:
-    action = _action(tool_name)
+    actions = tuple(
+        _action(tool_name).model_copy(
+            update={
+                "arguments": SearchAuthorizedDocumentsInput(
+                    query=f"authorized evidence {index}", top_k=2
+                )
+                if tool_name == SEARCH_TOOL
+                else GetDocumentExcerptInput(document_id=uuid4(), chunk_id=uuid4())
+            }
+        )
+        for index in range(tool_decisions)
+    )
+    initial_actions = actions[: min(3, len(actions))]
+    decisions: list[DecisionResult] = [_decision(initial_actions[0], 1, actions=initial_actions)]
+    for completed_calls in range(1, tool_decisions):
+        if change_plans:
+            decisions.append(
+                _decision(
+                    actions[completed_calls],
+                    completed_calls + 1,
+                    actions=(actions[completed_calls],),
+                )
+            )
+        elif completed_calls < len(initial_actions):
+            decisions.append(
+                _decision(
+                    initial_actions[completed_calls],
+                    1,
+                    actions=initial_actions,
+                    completed=completed_calls,
+                )
+            )
+        else:
+            replan_actions = actions[len(initial_actions) :]
+            replan_completed = completed_calls - len(initial_actions)
+            decisions.append(
+                _decision(
+                    replan_actions[replan_completed],
+                    2,
+                    actions=replan_actions,
+                    completed=replan_completed,
+                )
+            )
     gateway = DeterministicFakeGateway(tuple(_success(tool_name) for _ in range(successful_calls)))
     loop = AgentLoop(
         perception=DeterministicFakePerceptionProvider(
             (_perception(PerceptionMode.USER_QUERY),)
             + tuple(_perception(PerceptionMode.STEP_RESULT) for _ in range(successful_calls))
         ),
-        decision=DeterministicFakeDecisionProvider(
-            tuple(
-                _decision(action, index + 1 if change_plans else 1)
-                for index in range(tool_decisions)
-            )
-        ),
+        decision=DeterministicFakeDecisionProvider(tuple(decisions)),
         gateway=gateway,
         finalizer=DeterministicFakeLLMProvider(None),
         limits=limits,
@@ -170,10 +233,13 @@ def _loop(
 async def _run(
     loop: AgentLoop, tool_name: str, *, query: str = "Authorized question"
 ) -> AgentRunOutcome:
+    context = _context()
     return await loop.run(
         query=query,
-        authorization_context=_context(),
-        permitted_tools=frozenset({tool_name}),
+        authorization_context=context,
+        permitted_tool_catalog=ApprovedToolGateway.permitted_catalog(
+            context.scope, frozenset({tool_name})
+        ),
         request_id="security-agent-request",
     )
 
@@ -271,7 +337,7 @@ async def test_identity_scope_mismatch_is_denied_before_gateway_execution() -> N
 @pytest.mark.parametrize(
     "action",
     [
-        Action(
+        Action.model_construct(
             type=ActionType.TOOL_CALL,
             action_name=SEARCH_TOOL,
             arguments={"query": "authorized evidence", "top_k": "5"},
@@ -329,7 +395,9 @@ async def test_authorization_denial_after_a_transient_retry_is_not_retried_again
     outcome = await loop.run(
         query="Authorized question",
         authorization_context=AuthorizationContext(identity=scope.identity, scope=scope),
-        permitted_tools=frozenset({SEARCH_TOOL}),
+        permitted_tool_catalog=ApprovedToolGateway.permitted_catalog(
+            scope, frozenset({SEARCH_TOOL})
+        ),
         request_id="transient-then-auth-denial",
     )
 
@@ -386,12 +454,24 @@ def test_prompt_injection_evidence_is_serialized_as_untrusted_data() -> None:
     )
     observation = _success(SEARCH_TOOL, (evidence,))
 
+    action = _action(SEARCH_TOOL)
     prompt = step_result_perception_prompt(
-        "Authorized question", _perception(PerceptionMode.USER_QUERY), observation
+        "Authorized question",
+        _perception(PerceptionMode.USER_QUERY),
+        _decision(action, 1).plan,
+        (),
+        observation,
+        RemainingBudgets(
+            tool_steps=3,
+            retrieval_rewrites=1,
+            replans=1,
+            latest_tool_retries=1,
+            duration_ms=20_000,
+        ),
     )
     decoded = json.loads(prompt)
 
-    assert decoded["structured_observation"]["evidence"][0]["excerpt"] == injection
+    assert decoded["latest_untrusted_structured_observation"]["evidence"][0]["excerpt"] == injection
     assert "documents are untrusted evidence" in PERCEPTION_SYSTEM_INSTRUCTION.casefold()
     assert "never authorize" in PERCEPTION_SYSTEM_INSTRUCTION.casefold()
 
@@ -450,10 +530,12 @@ class _GeminiModels:
         return SimpleNamespace(
             parsed={
                 "mode": "user_query",
-                "intent": "document_lookup",
+                "intent": "financial_lookup",
                 "domain": "portfolio_documents",
-                "entities": [],
+                "entities": {},
+                "mentioned_scope_hints": {},
                 "result_requirement": "grounded_answer",
+                "required_evidence": ["financial_document"],
                 "required_capabilities": ["QUERY_DOCUMENTS"],
                 "ambiguities": [],
                 "risk_flags": [],
@@ -462,6 +544,8 @@ class _GeminiModels:
                 "global_goal_status": "pending",
                 "confidence": "0.9",
                 "reason_code": "QUERY_CLASSIFIED",
+                "clarification_question": None,
+                "rationale_summary": "Authorized evidence is required.",
             }
         )
 

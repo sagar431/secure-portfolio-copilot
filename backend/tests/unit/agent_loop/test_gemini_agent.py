@@ -8,9 +8,16 @@ from app.agent.gemini import GeminiDecisionProvider, GeminiPerceptionProvider
 from app.agent.models import (
     EvidenceStatus,
     GoalStatus,
+    PerceptionEntities,
+    PerceptionIntent,
     PerceptionMode,
     PerceptionSnapshot,
+    RequiredEvidence,
+    ResultRequirement,
 )
+from app.mcp_gateway.contracts import APPROVED_TOOL_NAMES
+from app.mcp_gateway.gateway import ApprovedToolGateway
+from tests.unit.mcp_gateway.test_gateway import _authorization_scope
 
 
 class _Models:
@@ -24,10 +31,12 @@ class _Models:
         if "Perception" in str(config.system_instruction):
             parsed = {
                 "mode": "user_query",
-                "intent": "document_lookup",
+                "intent": "financial_lookup",
                 "domain": "portfolio_documents",
-                "entities": [],
+                "entities": {},
+                "mentioned_scope_hints": {},
                 "result_requirement": "grounded_answer",
+                "required_evidence": ["financial_document"],
                 "required_capabilities": ["QUERY_DOCUMENTS"],
                 "ambiguities": [],
                 "risk_flags": [],
@@ -36,11 +45,14 @@ class _Models:
                 "global_goal_status": "pending",
                 "confidence": 0.9,
                 "reason_code": "QUERY_CLASSIFIED",
+                "clarification_question": None,
+                "rationale_summary": "Authorized evidence is required.",
             }
         else:
             parsed = {
                 "plan": {
                     "version": 1,
+                    "plan_text": ["Search authorized evidence."],
                     "steps": [
                         {
                             "step_index": 0,
@@ -85,9 +97,11 @@ class _Client:
 def _perception() -> PerceptionSnapshot:
     return PerceptionSnapshot(
         mode=PerceptionMode.USER_QUERY,
-        intent="document_lookup",
+        intent=PerceptionIntent.FINANCIAL_LOOKUP,
         domain="portfolio_documents",
-        result_requirement="grounded_answer",
+        entities=PerceptionEntities(financial_metrics=("revenue",)),
+        result_requirement=ResultRequirement.GROUNDED_ANSWER,
+        required_evidence=(RequiredEvidence.FINANCIAL_DOCUMENT,),
         required_capabilities=("QUERY_DOCUMENTS",),
         evidence_status=EvidenceStatus.NONE,
         local_goal_status=GoalStatus.PENDING,
@@ -116,7 +130,9 @@ async def test_gemini_uses_separate_structured_stages_without_tools_or_thoughts(
     result = await decision.decide_initial(
         query="Synthetic question",
         perception=snapshot,
-        permitted_tools=frozenset({"portfolio.search_authorized_documents"}),
+        permitted_tool_catalog=ApprovedToolGateway.permitted_catalog(
+            _authorization_scope(), APPROVED_TOOL_NAMES
+        ),
     )
 
     assert snapshot.mode == PerceptionMode.USER_QUERY
@@ -148,6 +164,7 @@ async def test_gemini_malformed_scope_argument_fails_closed(
             {
                 "plan": {
                     "version": 1,
+                    "plan_text": ["Search authorized evidence."],
                     "steps": [
                         {
                             "step_index": 0,
@@ -173,6 +190,6 @@ async def test_gemini_malformed_scope_argument_fails_closed(
     monkeypatch.setattr(provider._stage, "_once", malformed)
     with pytest.raises(AgentModelError) as raised:
         await provider.decide_initial(
-            query="Synthetic", perception=_perception(), permitted_tools=frozenset()
+            query="Synthetic", perception=_perception(), permitted_tool_catalog=()
         )
     assert raised.value.code == AgentModelErrorCode.INVALID_RESPONSE

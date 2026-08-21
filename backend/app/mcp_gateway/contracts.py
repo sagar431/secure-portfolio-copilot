@@ -8,7 +8,6 @@ from openpyxl.utils.cell import coordinate_to_tuple
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.retrieval.limits import (
-    DEFAULT_TOP_K,
     MAX_EXCERPT_CHARACTERS,
     MAX_QUERY_CHARACTERS,
     MAX_TOP_K,
@@ -41,7 +40,7 @@ class GatewayReasonCode(StrEnum):
 
 class SearchAuthorizedDocumentsInput(StrictGatewayModel):
     query: str = Field(min_length=1, max_length=MAX_QUERY_CHARACTERS)
-    top_k: int = Field(default=DEFAULT_TOP_K, ge=1, le=MAX_TOP_K)
+    top_k: int = Field(ge=1, le=MAX_TOP_K)
 
     @field_validator("query")
     @classmethod
@@ -55,6 +54,38 @@ class SearchAuthorizedDocumentsInput(StrictGatewayModel):
 class GetDocumentExcerptInput(StrictGatewayModel):
     document_id: UUID
     chunk_id: UUID
+
+
+class PermittedToolInputField(StrictGatewayModel):
+    name: Literal["query", "top_k", "document_id", "chunk_id"]
+    value_type: Literal["string", "integer"]
+    required: bool
+    minimum: int | None = None
+    maximum: int | None = None
+    min_length: int | None = None
+    max_length: int | None = None
+    format: Literal["uuid"] | None = None
+
+
+class PermittedToolInputSchema(StrictGatewayModel):
+    fields: Annotated[tuple[PermittedToolInputField, ...], Field(min_length=2, max_length=2)]
+    additional_properties: Literal[False] = False
+
+    @model_validator(mode="after")
+    def unique_fields(self) -> PermittedToolInputSchema:
+        names = tuple(item.name for item in self.fields)
+        if len(set(names)) != len(names):
+            raise ValueError("Tool input fields must be unique")
+        return self
+
+
+class PermittedToolDescriptor(StrictGatewayModel):
+    """Sanitized Decision-facing projection of one trusted manifest entry."""
+
+    name: ApprovedToolName
+    purpose: str = Field(min_length=1, max_length=180)
+    input_schema: PermittedToolInputSchema
+    safe_result_description: str = Field(min_length=1, max_length=180)
 
 
 class EvidenceLocation(StrictGatewayModel):

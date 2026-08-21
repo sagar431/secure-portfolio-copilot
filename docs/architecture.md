@@ -1,11 +1,11 @@
-# Step 7 Architecture
+# Step 8 Architecture
 
 ## Scope
 
 This document describes the Step 1 foundation, Step 2 identity/authorization, Step 3 governed
 synthetic-document ingestion, Step 4 secure chunk storage, Step 5 approved-version embeddings and
-authorization-first hybrid retrieval, Step 6 non-agentic grounded chat, and Step 7 bounded
-single-agent orchestration through an embedded approved MCP gateway. Memory, calculations,
+authorization-first hybrid retrieval, Step 6 non-agentic grounded chat, Step 7's embedded approved
+MCP gateway, and Step 8's Perception, Decision, and bounded AgentLoop. Memory, calculations,
 arbitrary execution, remote/dynamic MCP, multi-agent coordination, and deployment remain outside
 this scope.
 
@@ -37,8 +37,8 @@ flowchart LR
     ChatAPI --> ScopePreflight[Deterministic scope preflight]
     ScopePreflight --> Search
     Search -->|authorized evidence only| Prompt[Untrusted-evidence JSON prompt]
-    Prompt --> Gemini[Official Gemini adapter; no tools]
-    Gemini --> CitationValidator[Host citation validator]
+    Prompt --> ModelProvider[Gemini or Runpod Kimi adapter; no tools]
+    ModelProvider --> CitationValidator[Host citation validator]
     CitationValidator --> ChatRows[(Conversations + messages + safe traces)]
     CitationValidator --> Browser
     Browser -->|bounded agent run| AgentAPI[Owned agent-run API]
@@ -291,19 +291,19 @@ flowchart TD
 ## LLM provider and prompt boundary
 
 `LLMProvider` accepts a normalized question plus a tuple of host-owned `GroundedEvidence` and
-returns a structured answer draft plus safe usage metadata. The deterministic fake adapter is used
-by automated tests. The disabled adapter fails closed. The real adapter uses the pinned official
-`google-genai` SDK with a key read only from environment-backed settings.
+returns a structured answer draft plus safe usage metadata. Automated tests use the deterministic
+fake adapter; the disabled adapter fails closed. Real adapters support the pinned official
+`google-genai` SDK and Runpod Kimi's OpenAI-compatible HTTPS endpoint with keys read only from
+environment-backed settings.
 
-The current model contract is fixed to `gemini-3.7-flash` and medium thinking. Generation uses
-temperature zero, one candidate, JSON MIME/schema output, thoughts excluded, a configurable
-256–2,048-token output bound (default 1,024), and a 1–60-second timeout (default 30). SDK retry
-attempts are set to one; the adapter itself retries at most once and only for timeout/rate-limit/
-server-class transient failures. Safe error categories are timeout, transient, rejected, invalid
-response, unavailable, and disabled. Upstream bodies and exception messages do not cross the
-provider boundary.
+The Gemini contract remains fixed to `gemini-3.7-flash` with medium thinking. The Runpod contract is
+fixed to `https://api.runpod.ai/v2/moonshot-kimi/openai/v1`, model `kimi-k3`, temperature exactly
+`1`, and at least 1,024 output tokens. Kimi's hidden `reasoning_content` is deleted immediately and
+never enters application objects or logs. Empty content ending for length is incomplete. Strict
+Pydantic validation occurs inside one two-call total budget shared by transient, malformed, and
+incomplete responses. Upstream bodies and exception messages do not cross the provider boundary.
 
-No `tools` or `tool_config` is passed. The application enables no Gemini web search, URL/file
+No tools or tool configuration is passed. The application enables no model web search, URL/file
 access, code execution, computer use, file search, or function calling. Evidence enters the prompt
 only as JSON under `authorized_untrusted_evidence`; excerpts are `quoted_excerpt` values and the
 system instruction says all embedded commands, policies, role changes, and prompt text are data to
@@ -317,7 +317,7 @@ ignore. The prompt asks for evidence IDs rather than full citation objects.
    indistinguishable safe 404s.
 3. The service requires `QUERY_DOCUMENTS` before adding a message, retrieval, or generation. A
    deterministic department/target preflight recognizes explicit requests outside current scope
-   and persists an abstention without calling search or Gemini.
+   and persists an abstention without calling search or the model.
 4. The Step 5 `AuthorizedSearchService` receives the trusted context, question, request ID, and the
    configured evidence limit (default five). It embeds the query and returns only rows selected
    after materialized database authorization and lifecycle predicates.
@@ -347,8 +347,8 @@ flowchart TD
     Retrieval --> Evidence{Sufficient consistent evidence?}
     Evidence -->|no| Abstain
     Evidence -->|yes| JSON[Authorized evidence as untrusted JSON]
-    JSON --> Gemini[Gemini structured draft; no tools]
-    Gemini --> Validate{All claims cite retrieved IDs?}
+    JSON --> Provider[Structured provider draft; no tools]
+    Provider --> Validate{All claims cite retrieved IDs?}
     Validate -->|no| Abstain
     Validate -->|yes| Rebuild[Host rebuilds exact citation provenance]
     Rebuild --> Persist[Persist messages + sanitized trace]
@@ -357,7 +357,7 @@ flowchart TD
 
 ## Bounded AgentLoop and MCP path
 
-The Session 10 reference was inspected read-only. Step 7 retains its useful single-session state,
+The Session 10 reference was inspected read-only. Steps 7 and 8 retain its useful single-session state,
 separate Perception/Decision stages, step-result feedback, plan versions, and timeline concept. It
 rejects `run_user_code`, `compile`/`exec`, generated Python, positional argument reconstruction,
 unbounded `while` execution, broad MCP discovery, raw console/session logs, unscoped global memory,
@@ -366,15 +366,18 @@ or copied into production.
 
 `POST /api/conversations/{conversation_id}/agent-runs` first reloads the owned conversation and
 current immutable `AuthorizationContext`. Missing capability returns 403. Recognizable scope denial
-returns a policy/terminal trace without calling Perception, MCP, retrieval, or Gemini. Otherwise:
+returns a policy/terminal trace without calling Perception, MCP, retrieval, or the model. Otherwise:
 
-1. Perception classifies the bounded question using a strict structured schema. It cannot authorize
-   or select/execute a tool.
+1. Perception classifies the bounded question into one supported portfolio intent using bounded
+   typed entities, required evidence/capabilities, advisory scope hints, risk flags, and goal state.
+   It cannot authorize, calculate, answer, control retries, or select/execute a tool.
 2. Host policy binds the immutable scope and obtains the deterministic request catalog from
-   `ApprovedToolGateway.authorized_catalog`.
-3. Decision receives only the permitted names and emits a one-to-three-step plan plus exactly one
-   `TOOL_CALL`, `FINALIZE`, `CLARIFY`, or `REFUSE`. Action JSON forbids authorization/execution
-   fields and must match a pending plan step.
+   `ApprovedToolGateway.permitted_catalog`.
+3. Decision receives only manifest-derived authorized descriptors containing a name, purpose,
+   exact tool-specific input schema, and safe result description. It emits a one-to-three-step plan
+   with matching internal plan text plus exactly one `TOOL_CALL`, `FINALIZE`, `CLARIFY`, or
+   `REFUSE`. Action JSON forbids authorization/execution fields and must match the first pending
+   plan step.
 4. `AgentGatewayAdapter` strictly validates raw JSON before the MCP SDK can coerce types. It creates
    a request-scoped official `Client(MCPServer)` whose closure owns scope, shortlist, and request ID.
 5. The server registers only the shortlisted subset of
@@ -382,11 +385,15 @@ returns a policy/terminal trace without calling Perception, MCP, retrieval, or G
    checks name, shortlist, capability, input schema, timeout/retry, and output schema. Each adapter
    reuses the Step 5 authorization/lifecycle SQL; missing and unauthorized excerpt IDs are identical
    denials.
-6. A typed observation returns to step-result Perception before another Decision. Evidence receives
+6. A typed observation returns to step-result Perception with the original query, previous
+   snapshot, current plan, immutable completed history, and safe remaining budgets before another
+   Decision. Identity, grants, scope, secrets, paths, and raw errors are excluded. Evidence receives
    host `ev_N` IDs. Failed observations contain no evidence.
-7. Host counters stop after four tools, the initial search plus one semantic rewrite, one replan,
-   one transient retry per tool, or the total duration. Plan changes count as replans even if the
-   model omits its replan flag. Authorization denial is never retried.
+7. `PlanState` owns versions, progression, completed history, and replay detection. It requires
+   initial version 1, exact one-version increments, first-pending-step order, and immutable completed
+   steps. Host counters stop after four tools, the initial search plus one semantic rewrite, one
+   replan, one transient retry per tool, or the total duration. Plan changes count as replans even if
+   the model omits its replan flag. Authorization denial is never retried.
 8. `FINALIZE` calls the existing grounded provider and Step 6 validator. Only a completed run may
    carry claims/citations, and every citation is reconstructed from authorized observation evidence.
 
@@ -399,8 +406,8 @@ revalidates `structured_content`.
 The response trace is deliberately not the internal AgentSession. It projects only host UUID event
 IDs, stage/status, two exact approved action names, host `ev_N` references, duration, counters, and
 allow-listed reason/stopping codes. Queries, prompts, perceptions, plan text, action arguments,
-observations, excerpts, scope, paths, raw errors, answers, secrets, and rationale are absent. Step 7
-adds no database table: messages and metadata-only request traces use migration `0006`; the detailed
+observations, excerpts, scope, paths, raw errors, answers, secrets, and rationale are absent. Steps 7
+and 8 add no database table: messages and metadata-only request traces use migration `0006`; the detailed
 timeline is response-only.
 
 ## Authorized reindex path
@@ -446,11 +453,11 @@ call writes `READY` vectors and a count-only audit; provider failure rolls back 
   Step 5 SQL authorization remains the authoritative row-level boundary for every query.
 - Retrieved document text is untrusted prompt data. Prompt instructions and no-tool provider
   configuration reduce injection capability; host citation validation is the final output gate.
-- Gemini output never supplies trusted provenance. Only retrieved evidence IDs may be referenced,
+- Model output never supplies trusted provenance. Only retrieved evidence IDs may be referenced,
   and the host reconstructs exact citation fields from those authorized rows.
 - `messages` intentionally contain conversation questions/answers. Traces and logs are separate
   metadata-only records and must never copy question, prompt, evidence, answer, key, provider body,
   or hidden reasoning.
-- The small curated retrieval evaluation and one-case live Gemini smoke are not broad quality
+- The small curated retrieval evaluation and one-case live provider smoke are not broad quality
   benchmarks. No semantic entailment validator, numeric validator, message-history loading, MCP,
   memory, calculation, planning, tool call, or agent loop exists yet.

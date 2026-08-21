@@ -1,13 +1,20 @@
 import asyncio
 import json
-from typing import TypeVar, cast
+from typing import TypeVar
 
 from google import genai
 from google.genai import errors, types
 from pydantic import BaseModel, ValidationError
 
 from app.agent.contracts import AgentModelError, AgentModelErrorCode
-from app.agent.models import DecisionResult, PerceptionSnapshot, Plan, Step, StructuredObservation
+from app.agent.models import (
+    CompletedStep,
+    DecisionResult,
+    PerceptionSnapshot,
+    Plan,
+    RemainingBudgets,
+    StructuredObservation,
+)
 from app.agent.prompts import (
     DECISION_SYSTEM_INSTRUCTION,
     PERCEPTION_SYSTEM_INSTRUCTION,
@@ -16,117 +23,13 @@ from app.agent.prompts import (
     step_result_perception_prompt,
     user_query_perception_prompt,
 )
+from app.agent.provider_schema import provider_schema
+from app.mcp_gateway.contracts import PermittedToolDescriptor
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
-_PERCEPTION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "mode": {"type": "string", "enum": ["user_query", "step_result"]},
-        "intent": {"type": "string", "enum": ["document_lookup", "clarification", "unsupported"]},
-        "domain": {"type": "string", "enum": ["portfolio_documents"]},
-        "entities": {"type": "array", "items": {"type": "string"}},
-        "result_requirement": {
-            "type": "string",
-            "enum": ["evidence", "grounded_answer", "clarification"],
-        },
-        "required_capabilities": {
-            "type": "array",
-            "items": {"type": "string", "enum": ["QUERY_DOCUMENTS"]},
-        },
-        "ambiguities": {"type": "array", "items": {"type": "string"}},
-        "risk_flags": {"type": "array", "items": {"type": "string"}},
-        "evidence_status": {
-            "type": "string",
-            "enum": ["none", "sufficient", "insufficient", "denied", "error"],
-        },
-        "local_goal_status": {
-            "type": "string",
-            "enum": ["pending", "advanced", "satisfied", "blocked"],
-        },
-        "global_goal_status": {
-            "type": "string",
-            "enum": ["pending", "advanced", "satisfied", "blocked"],
-        },
-        "confidence": {"type": "number"},
-        "reason_code": {"type": "string"},
-    },
-    "required": [
-        "mode",
-        "intent",
-        "domain",
-        "entities",
-        "result_requirement",
-        "required_capabilities",
-        "ambiguities",
-        "risk_flags",
-        "evidence_status",
-        "local_goal_status",
-        "global_goal_status",
-        "confidence",
-        "reason_code",
-    ],
-}
-
-_DECISION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "plan": {
-            "type": "object",
-            "properties": {
-                "version": {"type": "integer"},
-                "steps": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "step_index": {"type": "integer"},
-                            "action_type": {
-                                "type": "string",
-                                "enum": ["TOOL_CALL", "FINALIZE", "CLARIFY", "REFUSE"],
-                            },
-                            "action_name": {"type": "string", "nullable": True},
-                            "status": {
-                                "type": "string",
-                                "enum": ["pending", "completed", "failed"],
-                            },
-                            "reason_code": {"type": "string"},
-                        },
-                        "required": [
-                            "step_index",
-                            "action_type",
-                            "action_name",
-                            "status",
-                            "reason_code",
-                        ],
-                    },
-                },
-                "change_reason_code": {"type": "string"},
-            },
-            "required": ["version", "steps", "change_reason_code"],
-        },
-        "next_action": {
-            "type": "object",
-            "properties": {
-                "type": {"type": "string", "enum": ["TOOL_CALL", "FINALIZE", "CLARIFY", "REFUSE"]},
-                "action_name": {"type": "string", "nullable": True},
-                "arguments": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                        "top_k": {"type": "integer"},
-                        "document_id": {"type": "string"},
-                        "chunk_id": {"type": "string"},
-                    },
-                },
-                "reason_code": {"type": "string"},
-            },
-            "required": ["type", "action_name", "arguments", "reason_code"],
-        },
-        "replan": {"type": "boolean"},
-    },
-    "required": ["plan", "next_action", "replan"],
-}
+_PERCEPTION_SCHEMA = provider_schema(PerceptionSnapshot)
+_DECISION_SCHEMA = provider_schema(DecisionResult)
 
 
 class _GeminiStructuredStage:
@@ -216,18 +119,39 @@ class GeminiPerceptionProvider:
     async def perceive_user_query(self, *, query: str) -> PerceptionSnapshot:
         return await self._stage.generate(
             user_query_perception_prompt(query),
-            cast(dict[str, object], _PERCEPTION_SCHEMA),
+            _PERCEPTION_SCHEMA,
             PerceptionSnapshot,
         )
 
     async def perceive_step_result(
-        self, *, query: str, previous: PerceptionSnapshot, observation: StructuredObservation
+        self,
+        *,
+        query: str,
+        previous: PerceptionSnapshot,
+        current_plan: Plan,
+        completed_steps: tuple[CompletedStep, ...],
+        observation: StructuredObservation,
+        remaining_budgets: RemainingBudgets,
     ) -> PerceptionSnapshot:
-        return await self._stage.generate(
-            step_result_perception_prompt(query, previous, observation),
-            cast(dict[str, object], _PERCEPTION_SCHEMA),
+        result = await self._stage.generate(
+            step_result_perception_prompt(
+                query,
+                previous,
+                current_plan,
+                completed_steps,
+                observation,
+                remaining_budgets,
+            ),
+            _PERCEPTION_SCHEMA,
             PerceptionSnapshot,
         )
+        rationale = (result.rationale_summary or "").casefold().strip()
+        if len(rationale) >= 16 and any(
+            rationale in item.excerpt.casefold() or item.excerpt.casefold() in rationale
+            for item in observation.evidence
+        ):
+            raise AgentModelError(AgentModelErrorCode.INVALID_RESPONSE)
+        return result
 
 
 class GeminiDecisionProvider:
@@ -247,11 +171,15 @@ class GeminiDecisionProvider:
         return self._stage.model_name
 
     async def decide_initial(
-        self, *, query: str, perception: PerceptionSnapshot, permitted_tools: frozenset[str]
+        self,
+        *,
+        query: str,
+        perception: PerceptionSnapshot,
+        permitted_tool_catalog: tuple[PermittedToolDescriptor, ...],
     ) -> DecisionResult:
         return await self._stage.generate(
-            initial_decision_prompt(query, perception, permitted_tools),
-            cast(dict[str, object], _DECISION_SCHEMA),
+            initial_decision_prompt(query, perception, permitted_tool_catalog),
+            _DECISION_SCHEMA,
             DecisionResult,
         )
 
@@ -261,13 +189,17 @@ class GeminiDecisionProvider:
         query: str,
         perception: PerceptionSnapshot,
         current_plan: Plan,
-        completed_steps: tuple[Step, ...],
-        permitted_tools: frozenset[str],
+        completed_steps: tuple[CompletedStep, ...],
+        permitted_tool_catalog: tuple[PermittedToolDescriptor, ...],
     ) -> DecisionResult:
         return await self._stage.generate(
             mid_session_decision_prompt(
-                query, perception, current_plan, completed_steps, permitted_tools
+                query,
+                perception,
+                current_plan,
+                completed_steps,
+                permitted_tool_catalog,
             ),
-            cast(dict[str, object], _DECISION_SCHEMA),
+            _DECISION_SCHEMA,
             DecisionResult,
         )

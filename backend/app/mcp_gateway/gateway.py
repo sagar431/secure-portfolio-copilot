@@ -15,6 +15,9 @@ from app.mcp_gateway.contracts import (
     ApprovedToolName,
     GatewayReasonCode,
     GetDocumentExcerptInput,
+    PermittedToolDescriptor,
+    PermittedToolInputField,
+    PermittedToolInputSchema,
     SearchAuthorizedDocumentsInput,
     StructuredToolObservation,
     ToolPayload,
@@ -54,6 +57,8 @@ class ToolManifestEntry:
     input_model: type[BaseModel]
     output_model: type[BaseModel]
     required_capability: Capability
+    purpose: str
+    safe_result_description: str
 
 
 TOOL_MANIFEST: Mapping[ApprovedToolName, ToolManifestEntry] = {
@@ -61,11 +66,17 @@ TOOL_MANIFEST: Mapping[ApprovedToolName, ToolManifestEntry] = {
         input_model=SearchAuthorizedDocumentsInput,
         output_model=ToolPayload,
         required_capability=Capability.QUERY_DOCUMENTS,
+        purpose="Search authorized portfolio documents for evidence relevant to one bounded query.",
+        safe_result_description="Authorized evidence excerpts with host-owned document provenance.",
     ),
     ApprovedToolName.GET_DOCUMENT_EXCERPT: ToolManifestEntry(
         input_model=GetDocumentExcerptInput,
         output_model=ToolPayload,
         required_capability=Capability.QUERY_DOCUMENTS,
+        purpose="Retrieve one authorized excerpt using a known document and chunk identifier.",
+        safe_result_description=(
+            "One authorized evidence excerpt with host-owned source provenance."
+        ),
     ),
 }
 
@@ -121,6 +132,58 @@ class ApprovedToolGateway:
             for name, entry in TOOL_MANIFEST.items()
             if name.value in permitted_tools and entry.required_capability in capabilities
         )
+
+    @classmethod
+    def permitted_catalog(
+        cls,
+        authorization_scope: AuthorizationScope,
+        permitted_tools: frozenset[str],
+    ) -> tuple[PermittedToolDescriptor, ...]:
+        """Return only sanitized manifest data for Decision prompt construction."""
+        descriptors: list[PermittedToolDescriptor] = []
+        for name in cls.authorized_catalog(authorization_scope, permitted_tools):
+            entry = TOOL_MANIFEST[name]
+            schema = entry.input_model.model_json_schema(mode="validation")
+            properties = schema.get("properties", {})
+            required = set(schema.get("required", ()))
+            fields: list[PermittedToolInputField] = []
+            if not isinstance(properties, dict):
+                raise GatewayConfigurationError("INPUT_SCHEMA_MISMATCH")
+            for field_name, raw_field in properties.items():
+                if not isinstance(raw_field, dict):
+                    raise GatewayConfigurationError("INPUT_SCHEMA_MISMATCH")
+                value_type = raw_field.get("type")
+                if field_name not in {
+                    "query",
+                    "top_k",
+                    "document_id",
+                    "chunk_id",
+                } or value_type not in {
+                    "string",
+                    "integer",
+                }:
+                    raise GatewayConfigurationError("INPUT_SCHEMA_MISMATCH")
+                fields.append(
+                    PermittedToolInputField(
+                        name=field_name,
+                        value_type=value_type,
+                        required=field_name in required,
+                        minimum=raw_field.get("minimum"),
+                        maximum=raw_field.get("maximum"),
+                        min_length=raw_field.get("minLength"),
+                        max_length=raw_field.get("maxLength"),
+                        format=raw_field.get("format"),
+                    )
+                )
+            descriptors.append(
+                PermittedToolDescriptor(
+                    name=name,
+                    purpose=entry.purpose,
+                    input_schema=PermittedToolInputSchema(fields=tuple(fields)),
+                    safe_result_description=entry.safe_result_description,
+                )
+            )
+        return tuple(descriptors)
 
     @staticmethod
     def _observation(

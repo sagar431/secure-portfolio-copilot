@@ -58,10 +58,11 @@ class AgentGatewayAdapter:
             )
         try:
             approved_name = ApprovedToolName(action.action_name or "")
+            raw_arguments = action.arguments.model_dump(mode="json")
             TOOL_MANIFEST[approved_name].input_model.model_validate_json(
-                json.dumps(action.arguments), strict=True
+                json.dumps(raw_arguments), strict=True
             )
-        except (KeyError, TypeError, ValueError):
+        except (AttributeError, KeyError, TypeError, ValueError):
             return StructuredObservation(
                 tool_name=action.action_name or "portfolio.invalid",
                 status=ObservationStatus.DENIED,
@@ -76,7 +77,7 @@ class AgentGatewayAdapter:
         )
         try:
             async with Client(server, raise_exceptions=True) as client:
-                response = await client.call_tool(action.action_name or "", action.arguments)
+                response = await client.call_tool(action.action_name or "", raw_arguments)
             if response.is_error or response.structured_content is None:
                 raise ValueError("MCP tool failed safely")
             result = StructuredToolObservation.model_validate_json(

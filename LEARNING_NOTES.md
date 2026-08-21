@@ -528,7 +528,7 @@ numeric-correctness proof. Those broader validations remain future work.
 ### MCP tools involved
 
 None. Step 6 is a direct retrieve-then-generate service. MCP, Perception, Decision, plans, and the
-bounded AgentLoop begin only in Step 7.
+bounded AgentLoop begin only in Step 8.
 
 ### Security invariant
 
@@ -570,7 +570,7 @@ quality benchmark. Step 6 also has no retention/deletion workflow for stored con
 11. What happens when Alice asks for Atlas data or Orion Legal content?
 12. Why is Step 6 not an agent, memory system, calculation engine, or MCP implementation?
 
-## Step 7 — Bounded single-agent orchestration through MCP
+## Step 7 — Embedded MCP gateway and document tools
 
 ### Reuse audit: Session 10 as a lesson, not a dependency
 
@@ -581,9 +581,9 @@ and a visible timeline. Those ideas make the control flow explainable.
 Its unsafe mechanics were intentionally rejected: `run_user_code`, generated `CODE` blocks,
 `compile`/`exec`, positional argument reconstruction, shell/path/URL-capable tools, raw query/model/
 tool/result/error printing, global FAISS memory, raw session files, overwritten duplicate tool names,
-and loops that can force completion or run without reliable terminal limits. Step 7 is a rewrite
-with typed actions, host authority, strict schemas, bounded transitions, and safe projections; it
-does not import or copy Session 10.
+and loops that can force completion or run without reliable terminal limits. Steps 7 and 8 adapt
+the useful ideas with typed actions, host authority, strict schemas, bounded transitions, and safe
+projections; production code does not import or copy Session 10.
 
 ### Why the MCP gateway is a security boundary
 
@@ -653,3 +653,55 @@ agent.
 12. Why does finalization still use the Step 6 citation validator?
 13. Which state persists after an agent run, and which detailed state is response-only?
 14. Why is this one modular agent rather than a multi-agent system?
+
+## Step 8 — Perception, Decision, and bounded AgentLoop
+
+### Why Perception is not policy
+
+Perception is an observe/classify stage with seven bounded portfolio-document intents. Typed entity
+fields and `mentioned_scope_hints` describe language in the request; they never become policy input,
+database filters, tool arguments, or `AuthorizationScope`. Step-result Perception receives the
+original query, prior snapshot, current plan, immutable completed history, latest host observation,
+and safe remaining budgets—never identity, grants, secrets, paths, or raw errors. Its evidence view
+is advisory, while the host observation and citation validator remain authoritative.
+
+### Why Decision needs descriptions instead of names alone
+
+The trusted MCP manifest is projected into a capability-filtered catalog of name, purpose, exact
+input fields, and safe result description. Search accepts only `query` plus `top_k`; excerpt accepts
+only `document_id` plus `chunk_id`. The model therefore sees enough contract to propose one useful
+typed action without seeing identity or scope, and the host strictly validates that action before
+the MCP SDK can coerce it.
+
+### Why plan state has one owner
+
+`PlanState` owns the internal one-to-three-entry plan text, structured steps, versions, immutable
+completed history, and executed-action fingerprints. It requires version 1 initially, exact
+single-version increments for changed plans, unchanged status/version for continuations, and the
+first pending step in order. Host comparison counts a real plan change even if the model says it is
+not a replan. Plan exhaustion is a safe terminal condition; it cannot manufacture an answer.
+
+The Pydantic models are the authoritative schemas. One provider-schema transformer removes
+Gemini-unsupported annotations while retaining bounds, enums, required fields, and nested
+properties; strict local validation remains the final boundary. Shared scope-target preflight and
+home-tenant resolution now live in `chat/scope_guard.py`, so the agent no longer imports private
+helpers from the grounded-chat service.
+
+### Why Kimi needs a provider-specific boundary
+
+Runpod exposes Kimi through the OpenAI-compatible base URL
+`https://api.runpod.ai/v2/moonshot-kimi/openai/v1` with model ID `kimi-k3`. Kimi K3 requires
+temperature exactly `1`; unlike the Gemini path, lowering temperature is not a valid determinism
+control. Reasoning consumes the same output budget, so settings reject fewer than 1,024 output
+tokens. An empty visible answer with `finish_reason=length` is an incomplete provider response, not
+a successful empty answer.
+
+`reasoning_content` is transport metadata that the application does not need. The adapter deletes
+it immediately before visible-output validation and never places it in a domain object, exception,
+trace, log, response, or persistent model. Visible JSON remains untrusted and must pass the same
+strict Pydantic contracts as every other provider. One malformed live Decision demonstrated why
+server-side JSON schema guidance is not enough: the host failed closed. Malformed, incomplete, and
+transient responses now share one total two-call budget, preventing nested retry layers from
+silently producing three or four upstream calls.
+
+Step 9 has not started.

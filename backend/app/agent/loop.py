@@ -11,16 +11,13 @@ from app.agent.contracts import (
     PerceptionProvider,
 )
 from app.agent.models import (
-    Action,
     ActionType,
     AgentLoopLimits,
     AgentRunOutcome,
     AgentSession,
     ObservationStatus,
     PerceptionSnapshot,
-    Plan,
-    Step,
-    StepStatus,
+    RemainingBudgets,
     StoppingReason,
     StructuredObservation,
     TerminalStatus,
@@ -28,8 +25,10 @@ from app.agent.models import (
     TraceEventType,
     TraceStatus,
 )
+from app.agent.plan_state import PlanContractError, PlanExhaustedError, PlanState
 from app.chat.contracts import GroundedEvidence, GroundedGenerationRequest, LLMProviderError
 from app.chat.service import GroundingValidationError, validate_grounded_answer
+from app.mcp_gateway.contracts import PermittedToolDescriptor
 from app.policies.models import AuthorizationContext
 from app.schemas.chat import GroundedCitationData, GroundedClaimData
 
@@ -91,21 +90,12 @@ class AgentLoop:
             reason_code=reason_code,
         )
 
-    @staticmethod
-    def _action_matches_plan(action: Action, plan: Plan) -> bool:
-        return any(
-            step.status == StepStatus.PENDING
-            and step.action_type == action.type
-            and step.action_name == action.action_name
-            for step in plan.steps
-        )
-
     async def run(
         self,
         *,
         query: str,
         authorization_context: AuthorizationContext,
-        permitted_tools: frozenset[str],
+        permitted_tool_catalog: tuple[PermittedToolDescriptor, ...],
         request_id: str,
     ) -> AgentRunOutcome:
         started = self._clock()
@@ -113,12 +103,11 @@ class AgentLoop:
             request_id=request_id,
             original_query=query,
             authorization_context=authorization_context,
-            permitted_tools=permitted_tools,
+            permitted_tool_catalog=permitted_tool_catalog,
         )
+        permitted_tools = frozenset(item.name.value for item in permitted_tool_catalog)
         trace: list[TraceEvent] = []
         perceptions: list[PerceptionSnapshot] = []
-        plans: list[Plan] = []
-        completed_steps: list[Step] = []
         observations: list[StructuredObservation] = []
         evidence_by_id: dict[str, GroundedEvidence] = {}
         step_count = replan_count = retry_count = 0
@@ -173,7 +162,7 @@ class AgentLoop:
                 self._decision.decide_initial(
                     query=query,
                     perception=perception,
-                    permitted_tools=permitted_tools,
+                    permitted_tool_catalog=permitted_tool_catalog,
                 ),
                 started=started,
             )
@@ -197,8 +186,29 @@ class AgentLoop:
                 replan_count,
                 retry_count,
             )
-        plans.append(decision.plan)
-        session = session.model_copy(update={"plans": tuple(plans)})
+        try:
+            plan_state = PlanState.initial(decision)
+        except PlanExhaustedError:
+            return self._terminal(
+                session,
+                TerminalStatus.FAILED,
+                StoppingReason.PLAN_EXHAUSTED,
+                trace,
+                step_count,
+                replan_count,
+                retry_count,
+            )
+        except PlanContractError:
+            return self._terminal(
+                session,
+                TerminalStatus.FAILED,
+                StoppingReason.MALFORMED_ACTION,
+                trace,
+                step_count,
+                replan_count,
+                retry_count,
+            )
+        session = session.model_copy(update={"plans": plan_state.versions})
 
         while True:
             action = decision.next_action
@@ -210,24 +220,23 @@ class AgentLoop:
                     action_name=action.action_name,
                 )
             )
-            if decision.replan:
-                replan_count += 1
-                session = session.model_copy(update={"replan_count": replan_count})
-                if replan_count > self._limits.max_replans:
-                    return self._terminal(
-                        session,
-                        TerminalStatus.LIMIT_REACHED,
-                        StoppingReason.MAX_REPLANS,
-                        trace,
-                        step_count,
-                        replan_count,
-                        retry_count,
-                    )
-            if not self._action_matches_plan(action, decision.plan):
+            try:
+                plan_state.validate_next_action(action)
+            except PlanExhaustedError:
                 return self._terminal(
                     session,
                     TerminalStatus.FAILED,
                     StoppingReason.PLAN_EXHAUSTED,
+                    trace,
+                    step_count,
+                    replan_count,
+                    retry_count,
+                )
+            except PlanContractError:
+                return self._terminal(
+                    session,
+                    TerminalStatus.FAILED,
+                    StoppingReason.MALFORMED_ACTION,
                     trace,
                     step_count,
                     replan_count,
@@ -436,25 +445,35 @@ class AgentLoop:
                 )
             for item in observation.evidence:
                 evidence_by_id[item.evidence_id] = item
-            matched_step = next(
-                step
-                for step in decision.plan.steps
-                if step.status == StepStatus.PENDING
-                and step.action_type == action.type
-                and step.action_name == action.action_name
+            plan_state = plan_state.complete_next(action)
+            session = session.model_copy(
+                update={
+                    "plans": plan_state.versions,
+                    "completed_steps": plan_state.completed_history,
+                }
             )
-            completed_steps.append(
-                matched_step.model_copy(
-                    update={"status": StepStatus.COMPLETED, "reason_code": "TOOL_COMPLETED"}
-                )
+            remaining_budgets = RemainingBudgets(
+                tool_steps=max(0, self._limits.max_steps - step_count),
+                retrieval_rewrites=max(
+                    0,
+                    self._limits.max_retrieval_rewrites - max(0, retrieval_count - 1),
+                ),
+                replans=max(0, self._limits.max_replans - replan_count),
+                latest_tool_retries=max(0, 1 - observation.retry_count),
+                duration_ms=max(
+                    0,
+                    int((self._limits.max_duration_seconds - (self._clock() - started)) * 1000),
+                ),
             )
-            session = session.model_copy(update={"completed_steps": tuple(completed_steps)})
-
-            current_plan = decision.plan
             try:
                 perception = await self._within_budget(
                     self._perception.perceive_step_result(
-                        query=query, previous=perception, observation=observation
+                        query=query,
+                        previous=perception,
+                        current_plan=plan_state.current_plan,
+                        completed_steps=plan_state.completed_history,
+                        observation=observation,
+                        remaining_budgets=remaining_budgets,
                     ),
                     started=started,
                 )
@@ -472,9 +491,9 @@ class AgentLoop:
                     self._decision.decide_mid_session(
                         query=query,
                         perception=perception,
-                        current_plan=decision.plan,
-                        completed_steps=tuple(completed_steps),
-                        permitted_tools=permitted_tools,
+                        current_plan=plan_state.current_plan,
+                        completed_steps=plan_state.completed_history,
+                        permitted_tool_catalog=permitted_tool_catalog,
                     ),
                     started=started,
                 )
@@ -498,11 +517,43 @@ class AgentLoop:
                     replan_count,
                     retry_count,
                 )
-            if decision.plan != current_plan and not decision.replan:
-                decision = decision.model_copy(update={"replan": True})
-            if decision.plan not in plans:
-                plans.append(decision.plan)
-                session = session.model_copy(update={"plans": tuple(plans)})
+            try:
+                plan_state, changed = plan_state.apply_decision(decision)
+            except PlanExhaustedError:
+                return self._terminal(
+                    session,
+                    TerminalStatus.FAILED,
+                    StoppingReason.PLAN_EXHAUSTED,
+                    trace,
+                    step_count,
+                    replan_count,
+                    retry_count,
+                )
+            except PlanContractError:
+                return self._terminal(
+                    session,
+                    TerminalStatus.FAILED,
+                    StoppingReason.MALFORMED_ACTION,
+                    trace,
+                    step_count,
+                    replan_count,
+                    retry_count,
+                )
+            if changed:
+                replan_count += 1
+                if replan_count > self._limits.max_replans:
+                    return self._terminal(
+                        session,
+                        TerminalStatus.LIMIT_REACHED,
+                        StoppingReason.MAX_REPLANS,
+                        trace,
+                        step_count,
+                        replan_count,
+                        retry_count,
+                    )
+            session = session.model_copy(
+                update={"plans": plan_state.versions, "replan_count": replan_count}
+            )
 
     async def _finalize(
         self,

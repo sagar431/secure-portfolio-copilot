@@ -7,9 +7,19 @@ from app.agent.contracts import (
     PerceptionProvider,
 )
 from app.agent.gemini import GeminiDecisionProvider, GeminiPerceptionProvider
-from app.agent.models import DecisionResult, PerceptionSnapshot, Plan, Step, StructuredObservation
+from app.agent.models import (
+    CompletedStep,
+    DecisionResult,
+    PerceptionSnapshot,
+    Plan,
+    RemainingBudgets,
+    StructuredObservation,
+)
 from app.agent.rule_based_fake import RuleBasedFakeAgentProvider
+from app.agent.runpod import RunpodKimiDecisionProvider, RunpodKimiPerceptionProvider
 from app.core.config import Settings
+from app.mcp_gateway.contracts import PermittedToolDescriptor
+from app.runpod_kimi import RunpodKimiClient
 
 
 class DisabledAgentProvider:
@@ -28,9 +38,12 @@ class DisabledAgentProvider:
         *,
         query: str,
         previous: PerceptionSnapshot,
+        current_plan: Plan,
+        completed_steps: tuple[CompletedStep, ...],
         observation: StructuredObservation,
+        remaining_budgets: RemainingBudgets,
     ) -> PerceptionSnapshot:
-        del query, previous, observation
+        del query, previous, current_plan, completed_steps, observation, remaining_budgets
         self._disabled()
 
     async def decide_initial(
@@ -38,9 +51,9 @@ class DisabledAgentProvider:
         *,
         query: str,
         perception: PerceptionSnapshot,
-        permitted_tools: frozenset[str],
+        permitted_tool_catalog: tuple[PermittedToolDescriptor, ...],
     ) -> DecisionResult:
-        del query, perception, permitted_tools
+        del query, perception, permitted_tool_catalog
         self._disabled()
 
     async def decide_mid_session(
@@ -49,10 +62,10 @@ class DisabledAgentProvider:
         query: str,
         perception: PerceptionSnapshot,
         current_plan: Plan,
-        completed_steps: tuple[Step, ...],
-        permitted_tools: frozenset[str],
+        completed_steps: tuple[CompletedStep, ...],
+        permitted_tool_catalog: tuple[PermittedToolDescriptor, ...],
     ) -> DecisionResult:
-        del query, perception, current_plan, completed_steps, permitted_tools
+        del query, perception, current_plan, completed_steps, permitted_tool_catalog
         self._disabled()
 
 
@@ -62,7 +75,24 @@ def create_agent_stage_providers(
     if settings.llm_provider == "fake":
         fake_provider = RuleBasedFakeAgentProvider()
         return fake_provider, fake_provider
-    if settings.llm_provider == "disabled" or settings.gemini_api_key is None:
+    if settings.llm_provider == "disabled":
+        disabled_provider = DisabledAgentProvider()
+        return disabled_provider, disabled_provider
+    if settings.llm_provider == "runpod":
+        if settings.runpod_api_key is None:
+            disabled_provider = DisabledAgentProvider()
+            return disabled_provider, disabled_provider
+        client = RunpodKimiClient(
+            api_key=settings.runpod_api_key.get_secret_value(),
+            base_url=settings.runpod_base_url,
+            model_name=settings.runpod_model_name,
+            timeout_seconds=settings.llm_timeout_seconds,
+            max_output_tokens=settings.llm_max_output_tokens,
+        )
+        return RunpodKimiPerceptionProvider(client=client), RunpodKimiDecisionProvider(
+            client=client
+        )
+    if settings.gemini_api_key is None:
         disabled_provider = DisabledAgentProvider()
         return disabled_provider, disabled_provider
     api_key = settings.gemini_api_key.get_secret_value()

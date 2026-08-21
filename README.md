@@ -1,6 +1,6 @@
 # Secure Portfolio Copilot
 
-A security-first portfolio analysis copilot, complete through Playbook Step 7. In addition to
+A security-first portfolio analysis copilot, complete through Playbook Step 8. In addition to
 database-revalidated identity, governed PDF/XLSX/CSV ingestion, and authorization-first hybrid
 retrieval, it provides both the Step 6 non-agentic grounded chat and a bounded single-agent path.
 The agent separates Perception and Decision, invokes only two approved document tools through an
@@ -16,8 +16,8 @@ cloud deployment.
 - Docker with Docker Compose
 - [Ollama](https://ollama.com/) for the live development embedding smoke test. Automated tests use a
   deterministic fake provider and do not require Ollama.
-- A Gemini API key in the ignored local `.env` for the separate minimal live Step 6 smoke. Automated
-  tests use deterministic fake LLM/agent providers and do not require Gemini or a key.
+- A Runpod API key in the ignored local `.env` for live Kimi Perception, Decision, and grounded
+  final-answer checks. Automated tests use deterministic fake providers and need no network key.
 
 ## One-time setup
 
@@ -62,11 +62,11 @@ a production embedding deployment.
 Add the Step 6 provider settings to the ignored local `.env`:
 
 ```dotenv
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=replace-with-a-local-gemini-key
-LLM_MODEL_NAME=gemini-3.7-flash
-LLM_THINKING_LEVEL=medium
-LLM_TIMEOUT_SECONDS=30
+LLM_PROVIDER=runpod
+RUNPOD_API_KEY=replace-with-a-local-runpod-key
+RUNPOD_BASE_URL=https://api.runpod.ai/v2/moonshot-kimi/openai/v1
+RUNPOD_MODEL_NAME=kimi-k3
+LLM_TIMEOUT_SECONDS=60
 LLM_MAX_OUTPUT_TOKENS=1024
 LLM_MAX_EVIDENCE_CHUNKS=5
 AGENT_MAX_STEPS=4
@@ -77,11 +77,14 @@ AGENT_TOOL_TIMEOUT_SECONDS=10
 AGENT_TOOL_MAX_TRANSIENT_RETRIES=1
 ```
 
-The model and thinking level are fixed by settings validation. `fake` exists for deterministic
-tests and is rejected in production; `disabled` fails closed. The official Google GenAI adapter
-requests structured JSON with no tools, no tool configuration, no included thoughts, and at most
-one application retry after a transient failure. Never pass or print `GEMINI_API_KEY` on a command
-line; load it only through the ignored `.env`.
+The Runpod base URL and `kimi-k3` model are fixed by settings validation. Kimi requires temperature
+exactly `1` and at least 1,024 output tokens because reasoning consumes the same output budget. The
+adapter deletes `reasoning_content` at the provider boundary, never exposes it, strictly validates
+visible JSON with Pydantic, and permits at most two total calls for a transient, malformed, or
+incomplete response. Empty content with `finish_reason=length` is incomplete, never success.
+`fake` is deterministic test infrastructure and is rejected in production; `disabled` fails closed.
+Gemini remains an optional compatible provider. Never pass or print either provider key on a
+command line; load it only from the ignored `.env`.
 
 The checked-in environment example contains development-only values. Do not use its database
 password in a shared or production environment. `.env` is ignored by Git.
@@ -89,7 +92,7 @@ password in a shared or production environment. `.env` is ignored by Git.
 ## Start the application
 
 Use three application terminals from the repository root, plus a running local Ollama service for
-live hybrid retrieval. Grounded chat additionally requires the local `.env` Gemini configuration.
+live hybrid retrieval. Grounded chat additionally requires the local `.env` model configuration.
 
 Database:
 
@@ -177,9 +180,12 @@ npm audit --audit-level=high
 npm run build
 ```
 
-The verified Step 7 checkpoint passes 236 backend tests and 88 frontend Vitest tests, plus
-all format, lint, strict type, audit, build, migration, and integrity gates. See the testing guide
-for the focused fake-provider, MCP/agent, redaction, migration-cycle, and live Gemini checks.
+The current Step 8 correction passes 263 backend tests and the previously verified 88 frontend
+Vitest tests, plus backend format/lint/strict-type gates. Live Runpod Kimi initial/step-result
+Perception, initial/mid-session Decision, and grounded final-answer contracts pass against
+`kimi-k3`; the final answer contained one host-validatable cited claim with no retry. Step 9 has not
+started. See the testing guide for focused fake-provider, MCP/agent, redaction, migration-cycle, and
+live provider checks.
 
 Database and migrations:
 
@@ -203,9 +209,9 @@ docker compose exec -T db psql -U portfolio -d portfolio \
 
 For the live Step 5 provider check, run `ollama serve` in another terminal (or use the Ollama
 desktop service), then run `ollama pull nomic-embed-text:v1.5` in a separate shell before starting
-the backend. Run the live Step 6 Gemini smoke separately with synthetic authorized evidence and the
-ignored `.env`; do not print the key, question, prompt, evidence, answer, or reasoning. Automated
-tests use neither live provider.
+the backend. Run `uv run python -m app.scripts.live_runpod_kimi_smoke` separately from `backend`;
+it prints only bounded contract metadata and never prints the key, prompts, evidence, answer text,
+token counts, provider body, or reasoning. Automated tests use no live provider.
 
 Stop the application processes with `Ctrl+C`. Stop the database without deleting its volume:
 
@@ -318,11 +324,11 @@ The service performs a deterministic preflight for recognizable unauthorized ten
 department targets, then calls the Step 5 `AuthorizedSearchService`. Only sufficient rows returned
 through its database-derived authorization and lifecycle filters become prompt evidence. At most
 five rows are serialized as `authorized_untrusted_evidence`; document strings are quoted JSON data,
-not instructions. The `gemini-3.7-flash` adapter uses medium thinking, excludes thoughts, requests
-bounded structured JSON, disables SDK retries, allows at most one explicit transient retry, and
-configures no tools or tool access.
+not instructions. The selected adapter requests bounded structured JSON and configures no tools or
+tool access. The Runpod path fixes the exact Kimi endpoint/model, temperature `1`, and a minimum
+1,024-token output budget; visible output is strictly validated and hidden reasoning is discarded.
 
-Gemini returns claim text and evidence IDs, not trusted citation objects. Host validation requires
+The model returns claim text and evidence IDs, not trusted citation objects. Host validation requires
 every supported claim to reference retrieved IDs and rebuilds citations from those exact evidence
 rows. Unknown, missing, or malformed references fail closed to `insufficient_evidence` with no
 claims/citations. Missing evidence and recognized out-of-scope targets also abstain; provider
@@ -336,15 +342,24 @@ client validator rejects extra fields, malformed coordinates, mismatched convers
 unknown, duplicate, or unreferenced citations.
 
 Step 6 does not provide a message-history read endpoint. Reloaded conversations are listed, but
-earlier turns are not loaded or sent back to Gemini; there is no conversation memory yet.
+earlier turns are not loaded or sent back to the model; there is no conversation memory yet.
 
-## Step 7 bounded agent and MCP workflow
+## Steps 7 and 8: MCP gateway and bounded agent workflow
 
 `POST /api/conversations/{conversation_id}/agent-runs` preserves the same owner and capability
 checks, recognizable scope preflight, authorized evidence, persistence, and final citation rules.
-One request owns one typed `AgentSession`. Separate Gemini structured calls perform initial and
-step-result Perception and initial/mid-session Decision. Decision returns one short plan and exactly
-one typed action; host code—not Gemini—executes it.
+Step 7 owns the embedded MCP boundary. One request owns one typed `AgentSession`; Step 8 adds
+separate structured model calls for initial/step-result Perception and initial/mid-session
+Decision. Perception observes and classifies only. It records mentioned scope as untrusted hints and
+never authorizes, selects a tool, calculates, controls retries, or answers. After a tool step it sees
+only the prior snapshot, current plan, immutable completed history, latest structured observation,
+and safe remaining budgets.
+
+Decision receives a manifest-derived, capability-filtered catalog containing only each approved
+name, purpose, exact tool-specific input schema, and safe result description. It returns a
+one-to-three-step plan with matching internal plan text and exactly one typed action; host code—not
+the model—executes it. Provider JSON schemas derive from the strict Pydantic contracts and every
+response is strictly validated locally.
 
 The embedded official MCP client/server advertises only the request's capability-filtered subset of
 `portfolio.search_authorized_documents` and `portfolio.get_document_excerpt`. The host validates
@@ -353,8 +368,10 @@ arguments, and revalidates it inside each adapter. Startup fails on duplicate na
 capability drift. Unknown tools, forged authorization fields, malformed data, unauthorized IDs,
 timeouts, and permanent failures return content-free observations.
 
-The loop allows at most four tool steps, one semantic search rewrite, one replan, one transient tool
-retry, a per-tool timeout, and 90 seconds total by default. Every path ends as `completed`,
+The plan-state module requires initial version 1, exact one-version increments for changed plans,
+first-pending-step execution, immutable completed history, and no completed-action replay. The loop
+allows at most four tool steps, one semantic search rewrite, one replan, one transient tool retry, a
+per-tool timeout, and 90 seconds total by default. Every path ends as `completed`,
 `refused`, `needs_clarification`, `insufficient_evidence`, `limit_reached`, or `failed`. A completed
 answer is accepted only after the Step 6 host citation validator reconstructs all cited provenance.
 
@@ -374,10 +391,10 @@ errors are generic, and request/audit logs exclude passwords, tokens, request bo
 strings.
 
 Upload, parsing, chunking, embedding, hybrid retrieval, grounded chat, and bounded orchestration are
-controlled capabilities. The embedding model contributes similarity only. Gemini may classify,
+controlled capabilities. The embedding model contributes similarity only. The selected model may classify,
 plan one typed next action, and draft claims from authorized evidence, but deterministic code owns
 authorization, catalogs, execution, lifecycle, evidence, limits, terminal states, citations,
-persistence, and audit metadata. No Gemini tools are configured; tool execution occurs only through
+persistence, and audit metadata. No model tools are configured; tool execution occurs only through
 the host MCP gateway. Logs/traces exclude questions, prompts, excerpts, answers, provider bodies,
 keys, and hidden reasoning; conversation `messages` intentionally persist the user's question and
 the controlled assistant answer.

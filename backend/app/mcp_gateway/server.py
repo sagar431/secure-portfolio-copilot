@@ -28,9 +28,7 @@ def build_in_process_mcp_server(
     if ApprovedToolName.SEARCH_AUTHORIZED_DOCUMENTS in catalog:
 
         @server.tool(name="portfolio.search_authorized_documents", structured_output=True)
-        async def search_authorized_documents(
-            query: str, top_k: int = 5
-        ) -> StructuredToolObservation:
+        async def search_authorized_documents(query: str, top_k: int) -> StructuredToolObservation:
             return await gateway.execute(
                 tool_name="portfolio.search_authorized_documents",
                 arguments={"query": query, "top_k": top_k},

@@ -7,6 +7,11 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.chat.contracts import GroundedEvidence
+from app.mcp_gateway.contracts import (
+    GetDocumentExcerptInput,
+    PermittedToolDescriptor,
+    SearchAuthorizedDocumentsInput,
+)
 from app.policies.models import AuthorizationContext
 from app.schemas.chat import GroundedCitationData, GroundedClaimData
 
@@ -92,20 +97,90 @@ class GoalStatus(StrEnum):
     BLOCKED = "blocked"
 
 
+class PerceptionIntent(StrEnum):
+    FINANCIAL_LOOKUP = "financial_lookup"
+    LEGAL_LOOKUP = "legal_lookup"
+    CROSS_DOMAIN_ANALYSIS = "cross_domain_analysis"
+    PORTFOLIO_COMPARISON = "portfolio_comparison"
+    CALCULATION_REQUIRED = "calculation_required"
+    CLARIFICATION = "clarification"
+    UNSUPPORTED = "unsupported"
+
+
+class ResultRequirement(StrEnum):
+    AUTHORIZED_EVIDENCE = "authorized_evidence"
+    GROUNDED_ANSWER = "grounded_answer"
+    CLARIFICATION = "clarification"
+    CONTROLLED_REFUSAL = "controlled_refusal"
+
+
+class RequiredEvidence(StrEnum):
+    FINANCIAL_DOCUMENT = "financial_document"
+    LEGAL_DOCUMENT = "legal_document"
+    SHARED_DOCUMENT = "shared_document"
+    COMPARISON_DOCUMENTS = "comparison_documents"
+    CALCULATION_INPUTS = "calculation_inputs"
+
+
+class PerceptionRiskFlag(StrEnum):
+    SCOPE_HINT_PRESENT = "scope_hint_present"
+    CROSS_TENANT_HINT = "cross_tenant_hint"
+    CROSS_DEPARTMENT_HINT = "cross_department_hint"
+    PROMPT_INJECTION = "prompt_injection"
+    CALCULATION_UNAVAILABLE = "calculation_unavailable"
+    AMBIGUOUS_TARGET = "ambiguous_target"
+    UNSUPPORTED_CAPABILITY = "unsupported_capability"
+
+
+EntityText = Annotated[str, Field(min_length=1, max_length=80)]
+SummaryText = Annotated[str, Field(min_length=1, max_length=300)]
+ClarificationText = Annotated[str, Field(min_length=1, max_length=240)]
+
+
+class PerceptionEntities(StrictModel):
+    companies: tuple[EntityText, ...] = Field(default=(), max_length=6)
+    departments: tuple[EntityText, ...] = Field(default=(), max_length=6)
+    documents: tuple[EntityText, ...] = Field(default=(), max_length=6)
+    financial_metrics: tuple[EntityText, ...] = Field(default=(), max_length=8)
+    legal_terms: tuple[EntityText, ...] = Field(default=(), max_length=8)
+    reporting_periods: tuple[EntityText, ...] = Field(default=(), max_length=6)
+    currencies: tuple[EntityText, ...] = Field(default=(), max_length=4)
+
+
+class MentionedScopeHints(StrictModel):
+    """Untrusted language observations; never executable authorization input."""
+
+    tenants: tuple[EntityText, ...] = Field(default=(), max_length=4)
+    companies: tuple[EntityText, ...] = Field(default=(), max_length=6)
+    departments: tuple[EntityText, ...] = Field(default=(), max_length=6)
+
+
+class RemainingBudgets(StrictModel):
+    tool_steps: int = Field(ge=0, le=4)
+    retrieval_rewrites: int = Field(ge=0, le=1)
+    replans: int = Field(ge=0, le=1)
+    latest_tool_retries: int = Field(ge=0, le=1)
+    duration_ms: int = Field(ge=0, le=120_000)
+
+
 class PerceptionSnapshot(StrictModel):
     mode: PerceptionMode
-    intent: Literal["document_lookup", "clarification", "unsupported"]
+    intent: PerceptionIntent
     domain: Literal["portfolio_documents"]
-    entities: tuple[str, ...] = Field(default=(), max_length=10)
-    result_requirement: Literal["evidence", "grounded_answer", "clarification"]
+    entities: PerceptionEntities = Field(default_factory=PerceptionEntities)
+    mentioned_scope_hints: MentionedScopeHints = Field(default_factory=MentionedScopeHints)
+    result_requirement: ResultRequirement
+    required_evidence: tuple[RequiredEvidence, ...] = Field(default=(), max_length=5)
     required_capabilities: tuple[Literal["QUERY_DOCUMENTS"], ...] = ()
-    ambiguities: tuple[str, ...] = Field(default=(), max_length=5)
-    risk_flags: tuple[str, ...] = Field(default=(), max_length=5)
+    ambiguities: tuple[EntityText, ...] = Field(default=(), max_length=5)
+    risk_flags: tuple[PerceptionRiskFlag, ...] = Field(default=(), max_length=5)
     evidence_status: EvidenceStatus
     local_goal_status: GoalStatus
     global_goal_status: GoalStatus
     confidence: float = Field(ge=0, le=1)
     reason_code: str = Field(pattern=r"^[A-Z][A-Z0-9_]{1,63}$")
+    clarification_question: ClarificationText | None = None
+    rationale_summary: SummaryText | None = Field(default=None, exclude=True)
 
 
 class ActionType(StrEnum):
@@ -115,48 +190,33 @@ class ActionType(StrEnum):
     REFUSE = "REFUSE"
 
 
-ActionArgument = str | int | float | bool | None | list[str]
-_FORBIDDEN_ARGUMENT_PARTS = (
-    "tenant",
-    "company",
-    "department",
-    "user",
-    "role",
-    "permission",
-    "authorization",
-    "scope",
-    "shell",
-    "sql",
-    "python",
-    "code",
-    "url",
-    "path",
-)
+class NoActionArguments(StrictModel):
+    pass
+
+
+ActionArguments = SearchAuthorizedDocumentsInput | GetDocumentExcerptInput | NoActionArguments
 
 
 class Action(StrictModel):
     type: ActionType
     action_name: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
-    arguments: dict[str, ActionArgument] = Field(default_factory=dict)
+    arguments: ActionArguments = Field(default_factory=NoActionArguments)
     reason_code: str = Field(pattern=r"^[A-Z][A-Z0-9_]{1,63}$")
-
-    @field_validator("arguments")
-    @classmethod
-    def reject_scope_and_execution_arguments(
-        cls, value: dict[str, ActionArgument]
-    ) -> dict[str, ActionArgument]:
-        for key in value:
-            normalized = key.casefold().replace("-", "_")
-            if any(part in normalized for part in _FORBIDDEN_ARGUMENT_PARTS):
-                raise ValueError("Authorization and unrestricted execution arguments are forbidden")
-        return value
 
     @model_validator(mode="after")
     def enforce_action_shape(self) -> Action:
         if self.type == ActionType.TOOL_CALL:
             if self.action_name is None:
                 raise ValueError("A tool action requires one namespaced action name")
-        elif self.action_name is not None or self.arguments:
+            if self.action_name == "portfolio.search_authorized_documents" and not isinstance(
+                self.arguments, SearchAuthorizedDocumentsInput
+            ):
+                raise ValueError("Search actions require the exact search input schema")
+            if self.action_name == "portfolio.get_document_excerpt" and not isinstance(
+                self.arguments, GetDocumentExcerptInput
+            ):
+                raise ValueError("Excerpt actions require the exact excerpt input schema")
+        elif self.action_name is not None or not isinstance(self.arguments, NoActionArguments):
             raise ValueError("Non-tool actions cannot carry a tool name or arguments")
         return self
 
@@ -177,6 +237,9 @@ class Step(StrictModel):
 
 class Plan(StrictModel):
     version: int = Field(ge=1)
+    plan_text: tuple[Annotated[str, Field(min_length=1, max_length=160)], ...] = Field(
+        min_length=1, max_length=3
+    )
     steps: tuple[Step, ...] = Field(min_length=1, max_length=3)
     change_reason_code: str = Field(pattern=r"^[A-Z][A-Z0-9_]{1,63}$")
 
@@ -187,11 +250,26 @@ class Plan(StrictModel):
             raise ValueError("Plan steps must be unique and ordered from zero")
         return value
 
+    @model_validator(mode="after")
+    def plan_text_matches_steps(self) -> Plan:
+        if len(self.plan_text) != len(self.steps):
+            raise ValueError("Plan text must have exactly one entry per structured step")
+        return self
+
 
 class DecisionResult(StrictModel):
     plan: Plan
     next_action: Action
     replan: bool = False
+
+
+class CompletedStep(StrictModel):
+    plan_version: int = Field(ge=1)
+    step_index: int = Field(ge=0, le=2)
+    action_type: ActionType
+    action_name: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
+    status: Literal[StepStatus.COMPLETED] = StepStatus.COMPLETED
+    reason_code: str = Field(pattern=r"^[A-Z][A-Z0-9_]{1,63}$")
 
 
 class ObservationStatus(StrEnum):
@@ -228,10 +306,10 @@ class AgentSession(StrictModel):
     request_id: str = Field(min_length=1, max_length=128, exclude=True)
     original_query: str = Field(min_length=1, max_length=1000, exclude=True)
     authorization_context: AuthorizationContext = Field(exclude=True)
-    permitted_tools: frozenset[str]
+    permitted_tool_catalog: tuple[PermittedToolDescriptor, ...]
     perceptions: tuple[PerceptionSnapshot, ...] = ()
     plans: tuple[Plan, ...] = ()
-    completed_steps: tuple[Step, ...] = ()
+    completed_steps: tuple[CompletedStep, ...] = ()
     observations: tuple[StructuredObservation, ...] = Field(default=(), exclude=True)
     terminal_status: TerminalStatus | None = None
     stopping_reason: StoppingReason | None = None
@@ -259,7 +337,7 @@ BoundedSeconds = Annotated[float, Field(gt=0, le=300)]
 
 
 class AgentLoopLimits(StrictModel):
-    max_steps: int = Field(default=4, ge=1, le=8)
+    max_steps: int = Field(default=4, ge=1, le=4)
     max_retrieval_rewrites: int = Field(default=1, ge=0, le=1)
-    max_replans: int = Field(default=1, ge=0, le=2)
+    max_replans: int = Field(default=1, ge=0, le=1)
     max_duration_seconds: BoundedSeconds = 30.0

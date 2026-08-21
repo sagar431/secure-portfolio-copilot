@@ -224,12 +224,15 @@ def test_missing_unknown_or_unsupported_citations_fail_closed(
         validate_grounded_answer(draft, (_evidence(),))
 
 
-def test_fake_llm_is_rejected_in_production_and_gemini_requires_a_key() -> None:
+def test_fake_llm_is_rejected_in_production_and_live_providers_require_keys() -> None:
     with pytest.raises(ValidationError, match="fake LLM provider"):
         _settings(app_env="production", embedding_provider="disabled", llm_provider="fake")
 
     with pytest.raises(ValidationError, match="GEMINI_API_KEY"):
         _settings(app_env="production", embedding_provider="disabled", llm_provider="gemini")
+
+    with pytest.raises(ValidationError, match="RUNPOD_API_KEY"):
+        _settings(app_env="production", embedding_provider="disabled", llm_provider="runpod")
 
     production = _settings(
         app_env="production",
@@ -238,6 +241,14 @@ def test_fake_llm_is_rejected_in_production_and_gemini_requires_a_key() -> None:
         gemini_api_key=SecretStr("synthetic-test-key-never-log"),
     )
     assert production.llm_provider == "gemini"
+
+    runpod_production = _settings(
+        app_env="production",
+        embedding_provider="disabled",
+        llm_provider="runpod",
+        runpod_api_key=SecretStr("synthetic-test-key-never-log"),
+    )
+    assert runpod_production.llm_provider == "runpod"
 
 
 def test_client_request_id_is_not_a_global_unique_chat_write_key() -> None:

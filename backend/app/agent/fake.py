@@ -3,12 +3,14 @@ from collections import deque
 from app.agent.contracts import AgentModelError, AgentModelErrorCode
 from app.agent.models import (
     Action,
+    CompletedStep,
     DecisionResult,
     PerceptionSnapshot,
     Plan,
-    Step,
+    RemainingBudgets,
     StructuredObservation,
 )
+from app.mcp_gateway.contracts import PermittedToolDescriptor
 from app.policies.models import AuthorizationContext
 
 
@@ -22,6 +24,16 @@ class DeterministicFakePerceptionProvider:
         self._snapshots = deque(snapshots)
         self.user_query_calls = 0
         self.step_result_calls = 0
+        self.step_result_inputs: list[
+            tuple[
+                str,
+                PerceptionSnapshot,
+                Plan,
+                tuple[CompletedStep, ...],
+                StructuredObservation,
+                RemainingBudgets,
+            ]
+        ] = []
 
     def _next(self) -> PerceptionSnapshot:
         if not self._snapshots:
@@ -40,9 +52,22 @@ class DeterministicFakePerceptionProvider:
         *,
         query: str,
         previous: PerceptionSnapshot,
+        current_plan: Plan,
+        completed_steps: tuple[CompletedStep, ...],
         observation: StructuredObservation,
+        remaining_budgets: RemainingBudgets,
     ) -> PerceptionSnapshot:
         self.step_result_calls += 1
+        self.step_result_inputs.append(
+            (
+                query,
+                previous,
+                current_plan,
+                completed_steps,
+                observation,
+                remaining_budgets,
+            )
+        )
         return self._next()
 
 
@@ -53,6 +78,7 @@ class DeterministicFakeDecisionProvider:
         self._decisions = deque(decisions)
         self.initial_calls = 0
         self.mid_session_calls = 0
+        self.seen_catalogs: list[tuple[PermittedToolDescriptor, ...]] = []
 
     def _next(self) -> DecisionResult:
         if not self._decisions:
@@ -67,9 +93,10 @@ class DeterministicFakeDecisionProvider:
         *,
         query: str,
         perception: PerceptionSnapshot,
-        permitted_tools: frozenset[str],
+        permitted_tool_catalog: tuple[PermittedToolDescriptor, ...],
     ) -> DecisionResult:
         self.initial_calls += 1
+        self.seen_catalogs.append(permitted_tool_catalog)
         return self._next()
 
     async def decide_mid_session(
@@ -78,10 +105,11 @@ class DeterministicFakeDecisionProvider:
         query: str,
         perception: PerceptionSnapshot,
         current_plan: Plan,
-        completed_steps: tuple[Step, ...],
-        permitted_tools: frozenset[str],
+        completed_steps: tuple[CompletedStep, ...],
+        permitted_tool_catalog: tuple[PermittedToolDescriptor, ...],
     ) -> DecisionResult:
         self.mid_session_calls += 1
+        self.seen_catalogs.append(permitted_tool_catalog)
         return self._next()
 
 
