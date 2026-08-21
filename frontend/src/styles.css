@@ -708,9 +708,122 @@ button {
 
 button:disabled,
 input:disabled,
-select:disabled {
+select:disabled,
+textarea:disabled {
   cursor: not-allowed;
   opacity: 0.62;
+}
+
+.memory-page {
+  display: grid;
+  width: min(1040px, 100%);
+  gap: 1.5rem;
+}
+
+.memory-page .page-heading h1 {
+  max-width: none;
+}
+
+.memory-create-card,
+.memory-list-card {
+  display: grid;
+  gap: 1.25rem;
+  padding: clamp(1.25rem, 3vw, 2rem);
+  border: 1px solid #c1d8cd;
+  border-radius: 1rem;
+  background: #fff;
+  box-shadow: 0 12px 35px rgb(20 72 54 / 8%);
+}
+
+.memory-create-card h2,
+.memory-list-card h2 {
+  margin: 0;
+}
+
+.memory-create-card label {
+  display: grid;
+  gap: 0.45rem;
+  color: #31473e;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.memory-create-card select,
+.memory-create-card textarea {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid #91ad9f;
+  border-radius: 0.5rem;
+  color: #17211d;
+  background: #fff;
+  font: inherit;
+}
+
+.memory-create-card textarea {
+  min-height: 7rem;
+  resize: vertical;
+}
+
+.memory-create-card .button-row {
+  align-items: center;
+}
+
+.memory-create-card small {
+  color: #65746e;
+}
+
+.memory-list {
+  display: grid;
+  gap: 1rem;
+}
+
+.memory-item {
+  display: grid;
+  gap: 1rem;
+  padding: 1.25rem;
+  border: 1px solid #dbe7e1;
+  border-radius: 0.75rem;
+  background: #fbfdfc;
+}
+
+.memory-item-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.memory-item > p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+.memory-metadata {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.memory-metadata div {
+  min-width: 0;
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  background: #edf5f0;
+}
+
+.memory-metadata dt {
+  color: #52645c;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.memory-metadata dd {
+  overflow-wrap: anywhere;
+  margin: 0.3rem 0 0;
 }
 
 .upload-progress {
@@ -1570,7 +1683,8 @@ td {
   .evaluation-metrics,
   .evaluation-summary--not-run,
   .agent-trace__summary,
-  .agent-trace__event-details {
+  .agent-trace__event-details,
+  .memory-metadata {
     grid-template-columns: 1fr;
   }
 

@@ -25,6 +25,9 @@ export function ApplicationLayout() {
             <Link to="/admin/documents">Document ingestion</Link>
           ) : null}
           {canQueryDocuments ? <Link to="/chat">Grounded chat</Link> : null}
+          {canQueryDocuments ? (
+            <Link to="/memories">Memory inspector</Link>
+          ) : null}
           {import.meta.env.DEV && canQueryDocuments ? (
             <Link to="/development/search">Authorized search</Link>
           ) : null}

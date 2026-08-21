@@ -737,3 +737,32 @@ generation model.
 
 The pinned Mac endpoint uses private-LAN HTTP and is development-only. The score cutoff is a stable
 heuristic rather than a calibrated confidence probability.
+
+## Interview feature 2 — Source-inheriting scoped memory
+
+### Why memory is an authorization problem before it is a retrieval problem
+
+Persisting a useful sentence is easy; proving it remains visible only to the same authorized
+audience is the hard part. Each memory therefore carries server-derived tenant, company, scope,
+owner, department, visibility, classification, expiry, and deletion state. Sourced memories also
+copy chunk/document/version provenance so current source authorization can be rechecked later.
+
+### Narrowing versus widening
+
+A Finance source can create Finance memory or a private memory for its current user, but it cannot
+be relabeled Legal or Shared. Mixed source ACLs fail closed because one memory row could not express
+their intersection faithfully. Source-free entries are private preferences only.
+
+### Why copied ACLs are not enough
+
+Copied metadata records what was true at creation, but a source may later be rejected, replaced,
+deleted, or made inaccessible. Retrieval excludes a memory if any source ID is absent from the
+current authorized-chunk statement. That check is materialized before memory ranking, preventing a
+revoked source from reappearing through search.
+
+### Prompt boundary
+
+Memory can affect presentation preferences but is not factual evidence. It is serialized in a
+separate `authorized_untrusted_memory` collection, bounded and company-matched, with explicit rules
+that embedded commands are inert and memory cannot support claims or citations. Host citation
+validation remains document-evidence-only.

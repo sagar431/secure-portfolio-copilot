@@ -8,6 +8,7 @@ import { ChatPage } from './pages/ChatPage'
 import { DocumentIngestionPage } from './pages/DocumentIngestionPage'
 import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
+import { MemoryPage } from './pages/MemoryPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 
 export function App() {
@@ -19,6 +20,7 @@ export function App() {
           <Route index element={<HomePage />} />
           <Route element={<CapabilityRoute capability="QUERY_DOCUMENTS" />}>
             <Route path="chat" element={<ChatPage />} />
+            <Route path="memories" element={<MemoryPage />} />
           </Route>
           <Route element={<CapabilityRoute capability="MANAGE_UPLOADS" />}>
             <Route path="admin/documents" element={<DocumentIngestionPage />} />

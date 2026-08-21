@@ -22,6 +22,26 @@ These tests prove deterministic simple/complex/multi-document/low-confidence/age
 one-way fallback, exact authorized-request reuse, pinned Qwen transport, no tools or thinking,
 strict output validation, content-free failures, and Kimi-only agent stages/finalization.
 
+## Focused scoped-memory checks
+
+```bash
+cd backend
+uv run pytest -q \
+  tests/unit/memory \
+  tests/integration/test_scoped_memory.py \
+  tests/integration/test_grounded_chat.py \
+  tests/security/test_chat_security.py
+
+cd ../frontend
+npm test -- --run src/api/memory.test.ts src/pages/MemoryPage.test.tsx src/App.test.tsx
+```
+
+These checks prove private-user/Finance/Legal/Shared isolation across users, departments, companies,
+and tenants; rejection of forged ACL/owner fields and source widening; expiry, soft deletion, and
+source-revocation behavior; authorization before full-text ranking; prompt-injection containment;
+metadata-only logging; strict client parsing; and inspector/delete behavior. Validate migration
+`0008` with `0006 -> 0008 -> 0007 -> 0008` plus `uv run alembic check`.
+
 ## Backend quality checks
 
 ```bash

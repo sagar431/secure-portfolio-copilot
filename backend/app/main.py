@@ -9,6 +9,7 @@ from app.api.routes.auth import router as auth_router
 from app.api.routes.conversations import router as conversations_router
 from app.api.routes.development import router as development_router
 from app.api.routes.documents import router as documents_router
+from app.api.routes.memories import router as memories_router
 from app.api.routes.system import router as system_router
 from app.core.config import Settings, get_settings
 from app.core.errors import register_exception_handlers
@@ -48,6 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(documents_router)
     application.include_router(conversations_router)
     application.include_router(agent_runs_router)
+    application.include_router(memories_router)
     if active_settings.app_env in {"development", "test"}:
         application.include_router(development_router)
     return application

@@ -10,6 +10,7 @@ from app.chat.contracts import (
     GroundedAnswerDraft,
     GroundedEvidence,
     GroundedGenerationRequest,
+    GroundedMemory,
     LLMErrorCode,
     LLMProvider,
     LLMProviderError,
@@ -24,6 +25,7 @@ from app.chat.repository import (
 )
 from app.chat.scope_guard import request_matches_authorized_scope, resolve_home_tenant_id
 from app.core.errors import APIError
+from app.memory.repository import list_visible_memories
 from app.model_routing import RoutingSignals, WorkloadKind
 from app.models.chat import Conversation
 from app.models.identity import Capability
@@ -163,11 +165,13 @@ class GroundedChatService:
         llm_provider: LLMProvider,
         *,
         max_evidence_chunks: int,
+        max_memory_items: int = 0,
     ) -> None:
         self.session = session
         self.search_service = search_service
         self.llm_provider = llm_provider
         self.max_evidence_chunks = max_evidence_chunks
+        self.max_memory_items = max_memory_items
 
     async def create(
         self, context: AuthorizationContext, *, title: str | None
@@ -270,11 +274,39 @@ class GroundedChatService:
                 reason_code="INSUFFICIENT_AUTHORIZED_EVIDENCE",
             )
 
+        memories: tuple[GroundedMemory, ...] = ()
+        if self.max_memory_items > 0:
+            evidence_company_slugs = {item.document.company_slug for item in sufficient_results}
+            evidence_company_ids = tuple(
+                dict.fromkeys(
+                    company_id
+                    for grant in context.scope.grants
+                    for index, company_id in enumerate(grant.company_ids)
+                    if index < len(grant.company_slugs)
+                    and grant.company_slugs[index] in evidence_company_slugs
+                )
+            )
+            visible_memories = await list_visible_memories(
+                self.session,
+                context.scope,
+                company_ids=evidence_company_ids,
+                limit=self.max_memory_items,
+            )
+            memories = tuple(
+                GroundedMemory(
+                    memory_id=item.id,
+                    scope=item.scope,
+                    content=item.content,
+                )
+                for item in visible_memories
+            )
+
         try:
             generation = await self.llm_provider.generate(
                 GroundedGenerationRequest(
                     question=question,
                     evidence=evidence,
+                    memories=memories,
                     routing=RoutingSignals(
                         workload=WorkloadKind.GROUNDED_ANSWER,
                         question=question,

@@ -32,6 +32,7 @@ def get_grounded_chat_service(
         AuthorizedSearchService(session, create_embedding_provider(settings)),
         create_llm_provider(settings),
         max_evidence_chunks=settings.llm_max_evidence_chunks,
+        max_memory_items=5,
     )
 
 

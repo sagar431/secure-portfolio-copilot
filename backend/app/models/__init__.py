@@ -23,6 +23,7 @@ from app.models.identity import (
     User,
     WorkspaceGrant,
 )
+from app.models.memory import Memory, MemorySource
 
 __all__ = [
     "Company",
@@ -38,6 +39,8 @@ __all__ = [
     "IngestionJob",
     "Membership",
     "Message",
+    "Memory",
+    "MemorySource",
     "ParsedCell",
     "ParsedPage",
     "ParsedRow",

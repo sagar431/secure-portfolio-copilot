@@ -1,0 +1,1 @@
+"""Authorization-first scoped memory."""

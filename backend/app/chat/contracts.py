@@ -24,9 +24,17 @@ class GroundedEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class GroundedMemory:
+    memory_id: UUID
+    scope: str
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
 class GroundedGenerationRequest:
     question: str
     evidence: tuple[GroundedEvidence, ...]
+    memories: tuple[GroundedMemory, ...] = ()
     routing: RoutingSignals | None = None
 
 

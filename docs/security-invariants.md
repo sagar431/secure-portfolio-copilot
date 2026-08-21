@@ -250,6 +250,25 @@ These rules apply now and must remain true as later milestones are approved.
 90. **Safe route observability.** Traces contain actual model names and categorical host reason
     codes only. Questions, evidence, prompts, provider bodies, authorization data, and model
     reasoning remain absent.
+91. **No client-defined memory authority.** Memory requests cannot contain tenant, user, owner,
+    department, visibility, classification, or effective grants. The server derives them from the
+    current database context and authorized sources.
+92. **Source restrictions are inherited.** Every source chunk is resolved through the authorized
+    repository at creation. Sourced memory keeps one exact Finance, Legal, or Shared ACL tuple;
+    mixed ACLs and scope widening fail closed. Source-free memory is private-user only.
+93. **Authorization before memory retrieval.** Tenant, company, department, scope/private owner,
+    classification, expiry, deletion, and source lifecycle authorization are materialized before
+    memory list/search ranking or model context selection.
+94. **Source revocation is immediate.** If any source chunk stops being currently authorized,
+    active, or approved, its memory is absent even though copied provenance remains stored.
+95. **Memory is not evidence or instruction.** Visible memory is bounded, company-matched, and
+    separately serialized as untrusted non-evidentiary text. It cannot satisfy a citation and
+    embedded commands do not change authority, tools, or output validation.
+96. **Memory inspection and deletion reuse policy.** The browser receives only the current filtered
+    set. Delete first performs the same visibility query and then permits only the private owner or
+    original creator; missing, foreign, and unauthorized IDs share a safe 404.
+97. **Memory logs are content-free.** Audit records contain action, outcome, user/workspace/memory
+    IDs, scope, and result count only. Memory text and search queries never enter request/audit logs.
 
 Automated tests cover password/token primitives, exact seeded scopes, policy reason codes, generic
 login errors, forged fields, malformed/expired/wrong-issuer/wrong-audience/wrong-signature tokens,

@@ -1,13 +1,14 @@
 # Secure Portfolio Copilot
 
 A security-first portfolio analysis copilot, complete through Playbook Step 8 plus deterministic
-dual-model routing. In addition to
+dual-model routing and source-inheriting scoped memory. In addition to
 database-revalidated identity, governed PDF/XLSX/CSV ingestion, and authorization-first hybrid
 retrieval, it provides both the Step 6 non-agentic grounded chat and a bounded single-agent path.
 The agent separates Perception and Decision, invokes only two approved document tools through an
 embedded MCP gateway with host-injected authorization, and preserves Step 6 citation validation.
 Simple authorized grounded requests use Mac Ollama `qwen3:8b`; complex, multi-document,
-low-confidence, and agentic work uses Runpod `kimi-k3`. The project contains no memory, calculation
+low-confidence, and agentic work uses Runpod `kimi-k3`. Private-user, Finance, Legal, and Shared
+memory is filtered and source-reauthorized before retrieval. The project contains no calculation
 engine, arbitrary execution, multi-agent system, or cloud deployment yet.
 
 ## Prerequisites
@@ -370,7 +371,25 @@ client validator rejects extra fields, malformed coordinates, mismatched convers
 unknown, duplicate, or unreferenced citations.
 
 Step 6 does not provide a message-history read endpoint. Reloaded conversations are listed, but
-earlier turns are not loaded or sent back to the model; there is no conversation memory yet.
+earlier turns are not loaded or sent back to the model. Scoped long-term memory is a separate,
+explicit store; it is not reconstructed from conversation history.
+
+## Scoped memory
+
+`POST /api/memories`, `GET /api/memories`, `POST /api/memories/search`, and
+`DELETE /api/memories/{memory_id}` provide bounded create, inspect/search, and soft-delete flows.
+The server derives tenant, company, department, user, visibility, and classification from the
+current database authorization context and authorized source chunks. Source-free memory must be
+`PRIVATE_USER`; sourced Finance, Legal, and Shared memory inherits the source ACL exactly, while a
+private sourced memory may narrow visibility without changing its source restriction.
+
+Every read materializes current tenant/company/department/user/classification/expiry policy before
+search or display and reauthorizes every source chunk against current document lifecycle state.
+Expired, deleted, revoked-source, foreign-tenant, wrong-company, and wrong-department memory is
+absent. Memory passed to grounded chat is additionally company-limited to the retrieved evidence,
+bounded to five newest items, labeled untrusted and non-evidentiary, and cannot create a citation.
+The `/memories` inspector renders only the server-filtered list, supports source-free private
+preferences, and exposes deletion only when the server says the current user may delete.
 
 ## Steps 7 and 8: MCP gateway and bounded agent workflow
 
@@ -428,5 +447,5 @@ keys, and hidden reasoning; conversation `messages` intentionally persist the us
 the controlled assistant answer.
 
 Broad semantic entailment/numeric validation, reranking, message-history loading, trace persistence,
-retention jobs, memory, calculations, arbitrary code, remote/dynamic MCP, production embedding
+automated retention jobs, calculations, arbitrary code, remote/dynamic MCP, production embedding
 infrastructure, and AWS remain absent.

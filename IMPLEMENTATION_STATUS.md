@@ -2,14 +2,16 @@
 
 ## Current step
 
-Playbook Steps 7 and 8 plus interview feature 1 (deterministic model routing) are
+Playbook Steps 7 and 8 plus interview features 1 and 2 (deterministic model routing and scoped
+memory) are
 implementation-complete — Step 7 provides the embedded approved MCP gateway and two
 authorization-revalidating document tools; Step 8 provides separate typed Perception and Decision
 stages plus the host-owned bounded AgentLoop. The Step 6 grounded path remains intact. Live Runpod
 Kimi Perception, typed-catalog Decision, and grounded final-answer contracts pass. Simple,
 single-document, high-confidence grounded answers route to Mac Ollama `qwen3:8b`; complex,
-multi-document, low-confidence, and all agentic stages route to Runpod `kimi-k3`. Secure memory and
-deterministic financial calculations remain pending.
+multi-document, low-confidence, and all agentic stages route to Runpod `kimi-k3`. Scoped private,
+Finance, Legal, and Shared memory is source-reauthorized before retrieval. Deterministic financial
+calculations remain pending.
 
 ## Implemented
 
@@ -23,6 +25,22 @@ deterministic financial calculations remain pending.
 - Agent Perception, Decision, and finalization remain explicitly pinned to Kimi in router mode.
   Authorized evidence objects are reused unchanged on fallback. Migration `20260821_0007` records
   only the actual model, allow-listed route/fallback reason codes, and a fallback flag.
+- Migration `20260821_0008` adds tenant/company-scoped `memories` and immutable copied-provenance
+  `memory_sources`. Database constraints bind the four scopes to valid Finance, Legal, or Shared
+  ACL tuples; private ownership is mandatory only for `PRIVATE_USER`.
+- Memory creation accepts no client identity, tenant, department, visibility, classification, or
+  owner fields. Source-free memory must be private. Every source ID is resolved through the current
+  authorized-chunk repository, mixed ACLs fail closed, and sourced memory inherits the exact source
+  restriction (with private visibility allowed only as a narrowing operation).
+- Memory list/search/get first materializes current tenant, company, department, private owner,
+  classification, expiry, deletion, and source authorization. Revoked/rejected/deleted source
+  chunks make their memory invisible immediately. Search ranks only that materialized visible set.
+- The grounded-chat prompt may receive at most five company-matched visible memories. They are
+  serialized separately as untrusted, non-evidentiary context; embedded commands are ignored and
+  memory IDs cannot satisfy document citation validation.
+- `/api/memories` provides create/inspect/search/delete contracts and metadata-only audit events.
+  The capability-gated `/memories` UI creates source-free private preferences, inspects only the
+  server-filtered result, and honors a server-derived delete permission.
 
 - All completed Step 1–5 identity, authorization, ingestion, lifecycle, chunking, embedding, hybrid
   retrieval, citation, and evaluation behavior remains in place.
@@ -164,8 +182,8 @@ failures.
 - The agent trace is response-only; Steps 7 and 8 do not add AgentRun/Plan/Step/Observation persistence or
   a trace-history endpoint. Existing message content and metadata-only request traces still persist.
 - The conversation list is persisted, and message rows are stored, but Step 6 has no message-history
-  read endpoint and sends no prior turns to the model. After a reload the UI lists the conversation but
-  cannot reload its earlier transcript; there is no working or long-term memory.
+  read endpoint and sends no prior turns to the model. Scoped memory is explicit and separate; it
+  does not restore earlier transcript turns after reload.
 - Scope preflight is a conservative bounded regex/token heuristic for recognizable tenant/company
   and department wording. It is defense in depth, not the primary authorization boundary and not a
   complete natural-language entity resolver. Step 5 repository authorization still controls every
@@ -185,7 +203,7 @@ failures.
 - Perception and Decision quality remains model-dependent. Deterministic host validation constrains
   actions, authority, bounds, and trace/output shape, but it does not prove that a plan is optimal.
 - The MCP gateway is embedded in-process. There is no remote MCP transport, dynamic discovery,
-  multi-agent coordination, memory, deterministic financial calculation, or general sandbox.
+  multi-agent coordination, deterministic financial calculation, or general sandbox.
 - Production still requires `EMBEDDING_PROVIDER=disabled`; therefore the current synchronous Step 5
   retrieval dependency makes grounded chat a local demonstration rather than a production-ready
   deployment. A production embedding/indexing design remains necessary.
@@ -197,5 +215,5 @@ fake-provider, live Runpod Kimi, chat/API/UI, authorization, redaction, and fail
 
 ## Next approved step
 
-Complete the database-backed live Step 8 agent API acceptance flow, then Playbook Step 9. Step 9 has
-not started in this checkpoint.
+Complete interview feature 3, the deterministic financial calculator tools, then run the combined
+three-feature acceptance gate. Playbook Step 9 has not started in this checkpoint.

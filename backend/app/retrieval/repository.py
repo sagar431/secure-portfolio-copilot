@@ -100,6 +100,12 @@ def _authorized_base(scope: AuthorizationScope):  # type: ignore[no-untyped-def]
     )
 
 
+def authorized_chunks_statement(scope: AuthorizationScope):  # type: ignore[no-untyped-def]
+    """Reusable authoritative source statement for derived-data reauthorization."""
+
+    return _authorized_base(scope)
+
+
 async def search_authorized_chunks(
     session: AsyncSession,
     scope: AuthorizationScope,

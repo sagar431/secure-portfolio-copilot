@@ -1,12 +1,12 @@
-# Step 8 + Deterministic Model Router Architecture
+# Step 8 + Router + Scoped Memory Architecture
 
 ## Scope
 
 This document describes the Step 1 foundation, Step 2 identity/authorization, Step 3 governed
 synthetic-document ingestion, Step 4 secure chunk storage, Step 5 approved-version embeddings and
 authorization-first hybrid retrieval, Step 6 non-agentic grounded chat, Step 7's embedded approved
-MCP gateway, Step 8's Perception, Decision, and bounded AgentLoop, and the deterministic Qwen/Kimi
-router. Memory, calculations,
+MCP gateway, Step 8's Perception, Decision, and bounded AgentLoop, the deterministic Qwen/Kimi
+router, and source-inheriting scoped memory. Calculations,
 arbitrary execution, remote/dynamic MCP, multi-agent coordination, and deployment remain outside
 this scope.
 
@@ -34,10 +34,15 @@ flowchart LR
     Search --> Chunks
     Search -->|query text only| Embedder
     Browser -->|owned conversation + question| ChatAPI[Grounded chat API]
+    Browser -->|inspect/create/delete| MemoryAPI[Scoped memory API]
+    MemoryAPI --> Scope
+    Scope --> MemoryPolicy[Memory ACL + source reauthorization]
+    MemoryPolicy --> MemoryRows[(Scoped memories + copied source provenance)]
     ChatAPI --> Scope
     ChatAPI --> ScopePreflight[Deterministic scope preflight]
     ScopePreflight --> Search
-    Search -->|authorized evidence only| Prompt[Untrusted-evidence JSON prompt]
+    Search -->|authorized evidence only| Prompt[Untrusted evidence + non-evidentiary memory JSON]
+    MemoryRows -->|visible company-matched memory only| Prompt
     Prompt --> Router[Deterministic post-authorization router]
     Router -->|simple, one document, high confidence| Qwen[Mac Ollama qwen3:8b; no tools/thinking]
     Router -->|complex, multi-document, low confidence| ModelProvider[Runpod kimi-k3; no tools]
@@ -234,7 +239,9 @@ governed ingestion. Migration `20260821_0006` adds `conversations`, `messages`, 
 conversation, tenant, user, `user|assistant` role, content, request ID, and creation time. Traces
 bind request/conversation/tenant/user and contain only model, safe status/reason, permitted
 retrieved document/chunk IDs, optional token counts, latency, retry count, and time. `/ready` still
-executes only `SELECT 1`.
+executes only `SELECT 1`. Migration `20260821_0008` adds `memories` and `memory_sources`; memory rows
+carry tenant/company/scope/owner plus exact department, visibility, and classification, while source
+rows copy the authorized chunk/document/version identity and ACL used at creation.
 
 ## Embedding provider boundary
 
@@ -334,17 +341,20 @@ ignore. The prompt asks for evidence IDs rather than full citation objects.
 5. Low-relevance results are dropped. Remaining results must have internally identical
    result/citation/source provenance before the host assigns `ev_1`, `ev_2`, and so on. Any
    inconsistency yields no prompt evidence and a controlled abstention.
-6. The provider receives only the question and those evidence objects. No identity, role, tenant,
-   company, department, capability, or scope is model-generated or model-editable.
-7. Host validation accepts only a supported draft with non-empty bounded claims. Each claim must
+6. The service separately loads at most five visible memory items for the evidence companies. The
+   same current SQL scope and every memory source are reauthorized before content is selected.
+7. The provider receives only the question, evidence objects, and separately labeled untrusted,
+   non-evidentiary memory. No identity, role, tenant, company, department, capability, or scope is
+   model-generated or model-editable.
+8. Host validation accepts only a supported draft with non-empty bounded claims. Each claim must
    name at least one unique evidence ID, and all IDs must exist in the request evidence map.
-8. The host reconstructs citation DTOs from the evidence map. Missing, unknown, fabricated, or
+9. The host reconstructs citation DTOs from the evidence map. Missing, unknown, fabricated, or
    incomplete references and an unsupported provider status produce `insufficient_evidence` with
    no claims or citations. The validator proves reference/provenance integrity, not semantic
    entailment or numeric correctness.
-9. Grounded/abstaining paths commit user and assistant messages plus one sanitized trace. A provider
+10. Grounded/abstaining paths commit user and assistant messages plus one sanitized trace. A provider
    failure commits the user message and `provider_error` trace, then returns a generic 503 or 504.
-10. Logs emit only request/conversation IDs, safe status/reason codes, and evidence/citation counts.
+11. Logs emit only request/conversation IDs, safe status/reason codes, and evidence/citation counts.
     They exclude keys, questions, prompts, excerpts, answers, provider output, and reasoning.
 
 ```mermaid
@@ -364,6 +374,19 @@ flowchart TD
     Rebuild --> Persist[Persist messages + sanitized trace]
     Persist --> UI[Grounded answer + evidence drawer]
 ```
+
+## Scoped memory path
+
+Memory is an explicit authorization-bound store, not global chat history. `PRIVATE_USER` may be
+source-free; Finance, Legal, and Shared writes require currently authorized source chunks whose
+copied ACL tuples match exactly. A private sourced memory may narrow who can see it but retains the
+source department/classification. Client-supplied ACL or ownership fields are rejected.
+
+List, search, get, and delete all start from a materialized visible-memory set: current workspace,
+company, department, user ownership, scope-to-ACL consistency, expiry, soft deletion, and the
+absence of any currently unauthorized source. Full-text ranking occurs only after that boundary.
+The inspector uses the same set. Memory audit events contain IDs, action, outcome, scope, and count,
+never content or search text.
 
 ## Bounded AgentLoop and MCP path
 
