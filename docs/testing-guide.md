@@ -1,7 +1,7 @@
 # Step 9 + Interview Features Testing Guide
 
 Run commands from the locations shown. Tests use only synthetic identities and an isolated tmpfs
-PostgreSQL test service. On 2026-08-21 these commands passed with 263 backend tests and 88
+PostgreSQL test service. On 2026-08-21 these commands passed with 298 backend tests and 98
 frontend tests. Automated tests configure deterministic fake embedding, LLM, Perception, Decision,
 and MCP adapters and require neither Ollama, a live model provider, a provider key, nor network access.
 

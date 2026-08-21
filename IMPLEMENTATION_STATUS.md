@@ -129,13 +129,13 @@ financial calculators whose inputs are reauthorized and whose arithmetic/finaliz
   authorization fields, paths, exceptions, secrets, and model rationale/reasoning. The frontend
   recursively rejects any extra or non-host trace value before rendering inert text.
 
-## Pending acceptance criteria
+## Acceptance criteria
 
-Live dual-route Qwen/Kimi verification remains part of the final three-feature gate. Live Runpod
-Kimi Perception, typed-catalog Decision, and grounded finalization passed. A full
-database-backed authorized agent API workflow remains a separate manual acceptance gate. Every
-deterministic backend/frontend, local MCP, migration, security, and repository-integrity gate from
-the Step 8 checkpoint passed.
+The combined three-feature gate passes. The full database-backed suite covers authorized agent and
+calculator API workflows. Live Runpod Kimi Perception, typed-catalog Decision, and grounded
+finalization pass. The dual-route smoke selected Qwen for the simple one-document case and Kimi for
+the multi-document case; both returned supported claims without fallback. Backend/frontend, local
+MCP, migration, security, dependency, build, and repository-integrity gates pass.
 
 ## Verification result
 
@@ -178,6 +178,15 @@ nondeterministic malformed Decision was
 observed once at Kimi's required temperature; validation failed closed, and the implementation now
 places malformed/incomplete responses inside the same strict two-attempt total budget as transient
 failures.
+
+All three interview features were independently checkpointed and jointly verified on 2026-08-21.
+Backend Ruff format/lint, strict mypy, and all 298 pytest cases pass. Frontend Prettier, ESLint,
+strict TypeScript, all 98 Vitest cases, the zero-vulnerability npm audit, and production build pass.
+Migration `0008 -> 0006 -> 0008` exercises both router and memory revisions and finishes at head
+with no schema drift. The live router smoke returned Qwen `SIMPLE_LOW_RISK` and Kimi
+`MULTI_DOCUMENT`, each supported with no fallback. Calculator integration proves exact 10% EBITDA
+margin, 25% revenue growth, and 3% net profit margin plus missing, malformed, zero-denominator, and
+authorization failures.
 
 ## Known limitations
 
@@ -222,5 +231,5 @@ fake-provider, live Runpod Kimi, chat/API/UI, authorization, redaction, and fail
 
 ## Next approved step
 
-Run the combined three-feature acceptance gate, live dual-route smoke, and branch publication. No
-additional product feature is approved in this checkpoint.
+Publish the isolated branch for review. No additional product feature is approved in this
+checkpoint.

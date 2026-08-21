@@ -68,6 +68,7 @@ async def test_three_calculator_tools_return_host_computed_results_and_citations
         assert calculation["formula"]
         assert len(calculation["trusted_inputs"]) == input_count
         assert all(item["unit"] == "INR crore" for item in calculation["trusted_inputs"])
+        assert all(item["cell_start"] == item["cell_end"] for item in payload["citations"])
         assert calculation["citation_ids"] == [
             item["citation_id"] for item in calculation["trusted_inputs"]
         ]

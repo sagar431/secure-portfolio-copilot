@@ -113,8 +113,8 @@ def _trusted_input(
             excerpt=chunk.content[:500],
             row_start=row_number,
             row_end=row_number,
-            cell_start=name_cell.coordinate,
-            cell_end=unit_cell.coordinate,
+            cell_start=value_cell.coordinate,
+            cell_end=value_cell.coordinate,
         ),
     )
 
