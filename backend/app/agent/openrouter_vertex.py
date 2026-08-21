@@ -20,16 +20,18 @@ from app.agent.prompts import (
     user_query_perception_prompt,
 )
 from app.mcp_gateway.contracts import PermittedToolDescriptor
-from app.runpod_kimi import KimiErrorCode, KimiProviderError, RunpodKimiClient
+from app.openrouter_vertex import (
+    OpenRouterErrorCode,
+    OpenRouterProviderError,
+    OpenRouterVertexClient,
+    json_contract_instruction,
+)
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
-_PERCEPTION_SCHEMA = PerceptionSnapshot.model_json_schema(mode="validation")
-_DECISION_SCHEMA = DecisionResult.model_json_schema(mode="validation")
 
-
-class _KimiStructuredStage:
-    def __init__(self, *, client: RunpodKimiClient, system_instruction: str) -> None:
+class _OpenRouterVertexStructuredStage:
+    def __init__(self, *, client: OpenRouterVertexClient, system_instruction: str) -> None:
         self.client = client
         self.system_instruction = system_instruction
 
@@ -37,13 +39,7 @@ class _KimiStructuredStage:
     def model_name(self) -> str:
         return self.client.model_name
 
-    async def generate(
-        self,
-        prompt: str,
-        schema_name: str,
-        schema: dict[str, object],
-        model: type[_ModelT],
-    ) -> _ModelT:
+    async def generate(self, prompt: str, model: type[_ModelT]) -> _ModelT:
         parsed: _ModelT | None = None
 
         def validate_content(content: str) -> None:
@@ -51,27 +47,28 @@ class _KimiStructuredStage:
             try:
                 parsed = model.model_validate_json(content, strict=True)
             except (TypeError, ValueError, ValidationError):
-                raise KimiProviderError(KimiErrorCode.INVALID_RESPONSE) from None
+                raise OpenRouterProviderError(OpenRouterErrorCode.INVALID_RESPONSE) from None
 
         try:
             await self.client.complete(
-                system_instruction=self.system_instruction,
+                system_instruction=json_contract_instruction(
+                    self.system_instruction, model.model_json_schema(mode="validation")
+                ),
                 prompt=prompt,
-                schema_name=schema_name,
-                response_schema=schema,
                 content_validator=validate_content,
+                max_attempts=2,
             )
             if parsed is None:
                 raise AgentModelError(AgentModelErrorCode.INVALID_RESPONSE)
             return parsed
-        except KimiProviderError as exc:
-            if exc.code == KimiErrorCode.TIMEOUT:
+        except OpenRouterProviderError as exc:
+            if exc.code == OpenRouterErrorCode.TIMEOUT:
                 code = AgentModelErrorCode.TIMEOUT
-            elif exc.code == KimiErrorCode.TRANSIENT:
+            elif exc.code == OpenRouterErrorCode.TRANSIENT:
                 code = AgentModelErrorCode.TRANSIENT
             elif exc.code in {
-                KimiErrorCode.INVALID_RESPONSE,
-                KimiErrorCode.INCOMPLETE_RESPONSE,
+                OpenRouterErrorCode.INVALID_RESPONSE,
+                OpenRouterErrorCode.INCOMPLETE_RESPONSE,
             }:
                 code = AgentModelErrorCode.INVALID_RESPONSE
             else:
@@ -79,9 +76,9 @@ class _KimiStructuredStage:
             raise AgentModelError(code) from None
 
 
-class RunpodKimiPerceptionProvider:
-    def __init__(self, *, client: RunpodKimiClient) -> None:
-        self._stage = _KimiStructuredStage(
+class OpenRouterVertexPerceptionProvider:
+    def __init__(self, *, client: OpenRouterVertexClient) -> None:
+        self._stage = _OpenRouterVertexStructuredStage(
             client=client,
             system_instruction=PERCEPTION_SYSTEM_INSTRUCTION,
         )
@@ -91,12 +88,7 @@ class RunpodKimiPerceptionProvider:
         return self._stage.model_name
 
     async def perceive_user_query(self, *, query: str) -> PerceptionSnapshot:
-        return await self._stage.generate(
-            user_query_perception_prompt(query),
-            "perception_snapshot",
-            _PERCEPTION_SCHEMA,
-            PerceptionSnapshot,
-        )
+        return await self._stage.generate(user_query_perception_prompt(query), PerceptionSnapshot)
 
     async def perceive_step_result(
         self,
@@ -117,8 +109,6 @@ class RunpodKimiPerceptionProvider:
                 observation,
                 remaining_budgets,
             ),
-            "perception_snapshot",
-            _PERCEPTION_SCHEMA,
             PerceptionSnapshot,
         )
         rationale = (result.rationale_summary or "").casefold().strip()
@@ -130,9 +120,9 @@ class RunpodKimiPerceptionProvider:
         return result
 
 
-class RunpodKimiDecisionProvider:
-    def __init__(self, *, client: RunpodKimiClient) -> None:
-        self._stage = _KimiStructuredStage(
+class OpenRouterVertexDecisionProvider:
+    def __init__(self, *, client: OpenRouterVertexClient) -> None:
+        self._stage = _OpenRouterVertexStructuredStage(
             client=client,
             system_instruction=DECISION_SYSTEM_INSTRUCTION,
         )
@@ -149,10 +139,7 @@ class RunpodKimiDecisionProvider:
         permitted_tool_catalog: tuple[PermittedToolDescriptor, ...],
     ) -> DecisionResult:
         return await self._stage.generate(
-            initial_decision_prompt(query, perception, permitted_tool_catalog),
-            "decision_result",
-            _DECISION_SCHEMA,
-            DecisionResult,
+            initial_decision_prompt(query, perception, permitted_tool_catalog), DecisionResult
         )
 
     async def decide_mid_session(
@@ -172,7 +159,5 @@ class RunpodKimiDecisionProvider:
                 completed_steps,
                 permitted_tool_catalog,
             ),
-            "decision_result",
-            _DECISION_SCHEMA,
             DecisionResult,
         )

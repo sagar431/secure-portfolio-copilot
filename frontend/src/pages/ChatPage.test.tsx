@@ -134,6 +134,12 @@ describe('ChatPage', () => {
       ),
     )
     expect(screen.getByText(groundedAnswerData.answer)).toBeInTheDocument()
+    expect(
+      screen.getByText('Model route: Gemini 3.1 Flash Lite'),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/google-vertex|openrouter/i),
+    ).not.toBeInTheDocument()
     expect(document.querySelector('script')).toBeNull()
     fireEvent.click(
       screen.getByRole('button', {
@@ -175,6 +181,10 @@ describe('ChatPage', () => {
       name: 'Bounded orchestration timeline',
     })
     expect(within(timeline).getByText('Session ID')).toBeInTheDocument()
+    expect(within(timeline).getByText('Gemini 3.7 Flash')).toBeInTheDocument()
+    expect(
+      within(timeline).queryByText(/google-vertex|openrouter/i),
+    ).not.toBeInTheDocument()
     expect(
       within(timeline).getByText(agentRunData.agent_session_id),
     ).toBeInTheDocument()

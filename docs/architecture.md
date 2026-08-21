@@ -5,7 +5,7 @@
 This document describes the Step 1 foundation, Step 2 identity/authorization, Step 3 governed
 synthetic-document ingestion, Step 4 secure chunk storage, Step 5 approved-version embeddings and
 authorization-first hybrid retrieval, Step 6 non-agentic grounded chat, Step 7's embedded approved
-MCP gateway, Step 8's Perception, Decision, and bounded AgentLoop, the deterministic Qwen/Kimi
+MCP gateway, Step 8's Perception, Decision, and bounded AgentLoop, the deterministic Gemini 3.1 Flash Lite/Gemini 3.7 Flash
 router, source-inheriting scoped memory, and Step 9's deterministic fixed calculators. Arbitrary
 execution, remote/dynamic MCP, multi-agent coordination, and deployment remain outside this scope.
 
@@ -43,9 +43,9 @@ flowchart LR
     Search -->|authorized evidence only| Prompt[Untrusted evidence + non-evidentiary memory JSON]
     MemoryRows -->|visible company-matched memory only| Prompt
     Prompt --> Router[Deterministic post-authorization router]
-    Router -->|simple, one document, high confidence| Qwen[Mac Ollama qwen3:8b; no tools/thinking]
-    Router -->|complex, multi-document, low confidence| ModelProvider[Runpod kimi-k3; no tools]
-    Qwen --> CitationValidator
+    Router -->|simple, one document, high confidence| FlashLite[OpenRouter Vertex Gemini 3.1 Flash Lite]
+    Router -->|complex, multi-document, low confidence| ModelProvider[OpenRouter Vertex Gemini 3.7 Flash]
+    FlashLite --> CitationValidator
     ModelProvider --> CitationValidator[Host citation validator]
     CitationValidator --> ChatRows[(Conversations + messages + safe traces)]
     CitationValidator --> Browser
@@ -306,21 +306,21 @@ flowchart TD
 Before generation, backend routing sees only the workload kind, normalized question shape,
 distinct authorized document count, and top authorized retrieval score. It does not receive or
 produce identity, grants, scope, classification, or authorization decisions. Agentic work bypasses
-the economical route and is pinned to Kimi. Retryable Qwen failures may fall forward to Kimi with
-the same authorized evidence; no strong request downgrades to Qwen.
+the economical route and is pinned to Gemini 3.7 Flash. Retryable Gemini 3.1 Flash Lite failures may fall forward to Gemini 3.7 Flash with
+the same authorized evidence; no strong request downgrades to Gemini 3.1 Flash Lite.
 
 `LLMProvider` accepts a normalized question plus a tuple of host-owned `GroundedEvidence` and
 returns a structured answer draft plus safe usage metadata. Automated tests use the deterministic
-fake adapter; the disabled adapter fails closed. Real adapters support the pinned official
-`google-genai` SDK and Runpod Kimi's OpenAI-compatible HTTPS endpoint with keys read only from
-environment-backed settings.
+fake adapter; the disabled adapter fails closed. The real adapter uses OpenRouter's
+OpenAI-compatible HTTPS endpoint with its key read only from environment-backed settings. The
+endpoint, `google-vertex` provider, and both Gemini model IDs are pinned. Provider routing uses
+`only: [google-vertex]`, `allow_fallbacks: false`, and `data_collection: deny`.
 
-The Gemini contract remains fixed to `gemini-3.7-flash` with medium thinking. The Runpod contract is
-fixed to `https://api.runpod.ai/v2/moonshot-kimi/openai/v1`, model `kimi-k3`, temperature exactly
-`1`, and at least 1,024 output tokens. Kimi's hidden `reasoning_content` is deleted immediately and
-never enters application objects or logs. Empty content ending for length is incomplete. Strict
-Pydantic validation occurs inside one two-call total budget shared by transient, malformed, and
-incomplete responses. Upstream bodies and exception messages do not cross the provider boundary.
+The adapter sends neither strict JSON-schema `response_format` nor reasoning parameters because
+the verified Vertex BYOK route does not support that combination. System prompts require JSON only.
+Only visible `message.content` crosses the provider boundary, and strict Pydantic validation occurs
+inside a two-call total budget. Upstream bodies, reasoning fields, prompts, and exception messages
+do not cross the provider boundary.
 
 No tools or tool configuration is passed. The application enables no model web search, URL/file
 access, code execution, computer use, file search, or function calling. Evidence enters the prompt

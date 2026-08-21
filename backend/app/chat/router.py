@@ -21,12 +21,14 @@ class DeterministicRoutingLLMProvider:
     def __init__(
         self,
         *,
-        qwen: LLMProvider,
-        kimi: LLMProvider,
+        simple: LLMProvider,
+        heavy: LLMProvider,
+        heavy_fallback: LLMProvider,
         low_confidence_threshold: float,
     ) -> None:
-        self._qwen = qwen
-        self._kimi = kimi
+        self._simple = simple
+        self._heavy = heavy
+        self._heavy_fallback = heavy_fallback
         self._low_confidence_threshold = low_confidence_threshold
 
     async def generate(self, request: GroundedGenerationRequest) -> LLMGeneration:
@@ -47,10 +49,10 @@ class DeterministicRoutingLLMProvider:
             signals,
             low_confidence_threshold=self._low_confidence_threshold,
         )
-        if decision.route is ModelRoute.KIMI:
+        if decision.route is ModelRoute.HEAVY:
             return await self._generate_strong(request, decision.reason)
         try:
-            generation = await self._qwen.generate(request)
+            generation = await self._simple.generate(request)
         except LLMProviderError as exc:
             if exc.code not in {
                 LLMErrorCode.TIMEOUT,
@@ -62,37 +64,37 @@ class DeterministicRoutingLLMProvider:
                     exc.code,
                     transient=exc.transient,
                     retry_count=exc.retry_count,
-                    model_name=self._qwen.model_name,
+                    model_name=self._simple.model_name,
                     route_reason=decision.reason,
                 ) from None
             try:
-                strong = await self._kimi.generate(request)
+                strong = await self._heavy_fallback.generate(request)
             except LLMProviderError as strong_exc:
                 raise LLMProviderError(
                     strong_exc.code,
                     transient=strong_exc.transient,
-                    retry_count=exc.retry_count + strong_exc.retry_count,
-                    model_name=self._kimi.model_name,
+                    retry_count=1 + strong_exc.retry_count,
+                    model_name=self._heavy_fallback.model_name,
                     route_reason=decision.reason,
                     fallback_used=True,
-                    fallback_reason=f"QWEN_{exc.code.value}",
+                    fallback_reason=f"SIMPLE_MODEL_{exc.code.value}",
                 ) from None
             return LLMGeneration(
                 answer=strong.answer,
                 usage=self._usage(
                     strong.usage,
-                    model_name=self._kimi.model_name,
+                    model_name=self._heavy_fallback.model_name,
                     reason=decision.reason,
                     fallback_used=True,
-                    fallback_reason=f"QWEN_{exc.code.value}",
-                    extra_retries=exc.retry_count,
+                    fallback_reason=f"SIMPLE_MODEL_{exc.code.value}",
+                    extra_retries=1,
                 ),
             )
         return LLMGeneration(
             answer=generation.answer,
             usage=self._usage(
                 generation.usage,
-                model_name=self._qwen.model_name,
+                model_name=self._simple.model_name,
                 reason=decision.reason,
             ),
         )
@@ -101,20 +103,20 @@ class DeterministicRoutingLLMProvider:
         self, request: GroundedGenerationRequest, reason: RouteReason
     ) -> LLMGeneration:
         try:
-            generation = await self._kimi.generate(request)
+            generation = await self._heavy.generate(request)
         except LLMProviderError as exc:
             raise LLMProviderError(
                 exc.code,
                 transient=exc.transient,
                 retry_count=exc.retry_count,
-                model_name=self._kimi.model_name,
+                model_name=self._heavy.model_name,
                 route_reason=reason,
             ) from None
         return LLMGeneration(
             answer=generation.answer,
             usage=self._usage(
                 generation.usage,
-                model_name=self._kimi.model_name,
+                model_name=self._heavy.model_name,
                 reason=reason,
             ),
         )

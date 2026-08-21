@@ -6,7 +6,6 @@ from app.agent.contracts import (
     DecisionProvider,
     PerceptionProvider,
 )
-from app.agent.gemini import GeminiDecisionProvider, GeminiPerceptionProvider
 from app.agent.models import (
     CompletedStep,
     DecisionResult,
@@ -15,12 +14,15 @@ from app.agent.models import (
     RemainingBudgets,
     StructuredObservation,
 )
+from app.agent.openrouter_vertex import (
+    OpenRouterVertexDecisionProvider,
+    OpenRouterVertexPerceptionProvider,
+)
 from app.agent.rule_based_fake import RuleBasedFakeAgentProvider
-from app.agent.runpod import RunpodKimiDecisionProvider, RunpodKimiPerceptionProvider
 from app.core.config import Settings
 from app.mcp_gateway.contracts import PermittedToolDescriptor
 from app.model_routing import RouteReason
-from app.runpod_kimi import RunpodKimiClient
+from app.openrouter_vertex import OpenRouterVertexClient
 
 
 class DisabledAgentProvider:
@@ -71,7 +73,7 @@ class DisabledAgentProvider:
 
 
 def agent_route_reason(settings: Settings) -> str:
-    if settings.llm_provider == "router":
+    if settings.llm_provider == "openrouter_vertex":
         return RouteReason.AGENTIC_REQUEST.value
     return "PROVIDER_SELECTED"
 
@@ -82,38 +84,18 @@ def create_agent_stage_providers(
     if settings.llm_provider == "fake":
         fake_provider = RuleBasedFakeAgentProvider()
         return fake_provider, fake_provider
-    if settings.llm_provider == "disabled":
+    if settings.llm_provider == "disabled" or settings.openrouter_api_key is None:
         disabled_provider = DisabledAgentProvider()
         return disabled_provider, disabled_provider
-    if settings.llm_provider in {"runpod", "router"}:
-        if settings.runpod_api_key is None:
-            disabled_provider = DisabledAgentProvider()
-            return disabled_provider, disabled_provider
-        client = RunpodKimiClient(
-            api_key=settings.runpod_api_key.get_secret_value(),
-            base_url=settings.runpod_base_url,
-            model_name=settings.runpod_model_name,
-            timeout_seconds=settings.llm_timeout_seconds,
-            max_output_tokens=settings.llm_max_output_tokens,
-        )
-        return RunpodKimiPerceptionProvider(client=client), RunpodKimiDecisionProvider(
-            client=client
-        )
-    if settings.gemini_api_key is None:
-        disabled_provider = DisabledAgentProvider()
-        return disabled_provider, disabled_provider
-    api_key = settings.gemini_api_key.get_secret_value()
+    client = OpenRouterVertexClient(
+        api_key=settings.openrouter_api_key.get_secret_value(),
+        base_url=settings.openrouter_base_url,
+        provider=settings.openrouter_provider,
+        model_name=settings.openrouter_heavy_model,
+        timeout_seconds=settings.openrouter_heavy_timeout_seconds,
+        max_output_tokens=settings.openrouter_heavy_max_output_tokens,
+    )
     return (
-        GeminiPerceptionProvider(
-            api_key=api_key,
-            model_name=settings.llm_model_name,
-            timeout_seconds=settings.llm_timeout_seconds,
-            max_output_tokens=settings.llm_max_output_tokens,
-        ),
-        GeminiDecisionProvider(
-            api_key=api_key,
-            model_name=settings.llm_model_name,
-            timeout_seconds=settings.llm_timeout_seconds,
-            max_output_tokens=settings.llm_max_output_tokens,
-        ),
+        OpenRouterVertexPerceptionProvider(client=client),
+        OpenRouterVertexDecisionProvider(client=client),
     )

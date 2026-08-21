@@ -20,7 +20,7 @@ from app.mcp_gateway.contracts import APPROVED_TOOL_NAMES
 from app.mcp_gateway.gateway import ApprovedToolGateway
 from app.models.identity import Capability
 from app.policies.models import AuthorizationContext
-from app.schemas.chat import AgentRunMessageData, AgentTraceEventData
+from app.schemas.chat import AgentRunMessageData, AgentTraceEventData, safe_model_name
 
 logger = logging.getLogger("app.agent.audit")
 
@@ -205,4 +205,8 @@ class AgentRunService:
                 AgentTraceEventData.model_validate(item.model_dump(mode="json"))
                 for item in outcome.trace
             ),
+            model_name=(
+                safe_model_name(self._model_name) if route_reason_code != "NO_MODEL_CALL" else None
+            ),
+            route_reason=(route_reason_code if route_reason_code != "NO_MODEL_CALL" else None),
         )

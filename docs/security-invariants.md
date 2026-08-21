@@ -150,12 +150,11 @@ These rules apply now and must remain true as later milestones are approved.
 57. **Documents are untrusted data.** Evidence is JSON-serialized under an explicit untrusted-data
     label. The system instruction requires ignoring embedded instructions, policies, role changes,
     prompt text, URLs, files, tools, web search, code execution, and hidden assumptions.
-58. **No model tools.** Neither the Gemini nor Runpod Kimi request configures tools, web/file
-    search, URL access, function calls, computer use, or code execution. Kimi
-    `reasoning_content` is deleted at the transport boundary and never propagated.
+58. **No model tools or reasoning.** OpenRouter Vertex requests configure no tools, web/file search,
+    URL access, function calls, computer use, code execution, JSON-schema response format, or
+    reasoning parameters. Only visible message content crosses the transport boundary.
 59. **Bounded provider call.** Question length, evidence count, excerpt size, output tokens, timeout,
-    response schema, candidate count, and temperature are bounded. Kimi uses its required exact
-    temperature `1` and at least 1,024 output tokens. A transient, malformed, or incomplete response
+    model ID and temperature are bounded. A transient, malformed, or incomplete response
     may receive one retry inside a two-call total budget. Authorization denials never retry.
 60. **Provider output is untrusted.** Structured output is locally validated. Unsupported status,
     empty claims, oversized/empty claim text, missing references, unknown evidence IDs, duplicate
@@ -212,7 +211,7 @@ These rules apply now and must remain true as later milestones are approved.
     model-controlled evidence identity before finalization.
 78. **Separate constrained model stages.** Perception and Decision are separate structured provider
     calls with timeout/output bounds, one bounded retry, and no tools/search/code/files/URLs. Strict
-    local models reject coercion and extra fields; hidden Kimi reasoning is discarded.
+    local models reject coercion and extra fields; hidden Gemini 3.7 Flash reasoning is discarded.
 79. **Citation finalization preserved.** Only `completed` can contain claims/citations. The Step 6
     host validator requires every claim ID to exist in authorized observation evidence and rebuilds
     exact document/version/chunk and source provenance.
@@ -241,11 +240,11 @@ These rules apply now and must remain true as later milestones are approved.
     contribute document count, confidence, or model context. Denial and no-evidence paths call no
     generation model.
 88. **Strong routes never downgrade.** Multi-document, low-confidence, complex, and agentic work
-    uses Kimi. Only retryable simple-route Qwen failures may fall forward to Kimi using the exact
+    uses Gemini 3.7 Flash. Only retryable simple-route Gemini 3.1 Flash Lite failures may fall forward to Gemini 3.7 Flash using the exact
     same authorized request.
-89. **Pinned no-reasoning Qwen boundary.** The Qwen endpoint/model are fixed; tools, streaming,
-    proxy inheritance, and thinking are disabled. Hidden reasoning fields are deleted and visible
-    thinking markers fail closed.
+89. **Pinned Vertex-only boundary.** The endpoint, provider slug, and both model IDs are fixed;
+    provider fallback, proxy inheritance, tools, streaming, and reasoning are disabled. Hidden
+    response fields are discarded and visible output fails closed unless it matches the contract.
 90. **Safe route observability.** Traces contain actual model names and categorical host reason
     codes only. Questions, evidence, prompts, provider bodies, authorization data, and model
     reasoning remain absent.
@@ -299,7 +298,7 @@ provider no-tool/bound/retry behavior, fake-provider grounded answers, citation 
 sanitized trace/log behavior, and all chat UI states. Steps 7 and 8 add adversarial action/gateway/MCP,
 strict schema, startup catalog, timeout/retry/denial, loop-limit/replan/rewrite, prompt-injection,
 typed perception/catalog, plan-version/order/history/replay, trace-smuggling, evidence/citation,
-real excerpt, and agent UI tests. Final verification passes 301 backend and 98 frontend tests,
+real excerpt, and agent UI tests. Final verification passes 302 backend and 98 frontend tests,
 migration `0008 -> 0006 -> 0008` reversibility/drift checks, local MCP smoke,
-production/integrity gates, and the zero-vulnerability frontend audit. Live Qwen/Kimi routing plus
-Runpod Kimi Perception, typed-catalog Decision, and grounded finalization pass.
+production/integrity gates, and the zero-vulnerability frontend audit. Live Gemini 3.1 Flash Lite/Gemini 3.7 Flash routing plus
+OpenRouter Vertex Perception, typed-catalog Decision, and grounded finalization pass.

@@ -1,18 +1,14 @@
 import json
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from google.genai import types
 
-from app.agent.contracts import AgentModelError, AgentModelErrorCode
 from app.agent.fake import (
     DeterministicFakeDecisionProvider,
     DeterministicFakeGateway,
     DeterministicFakePerceptionProvider,
 )
 from app.agent.gateway_adapter import AgentGatewayAdapter
-from app.agent.gemini import GeminiPerceptionProvider
 from app.agent.loop import AgentLoop
 from app.agent.models import (
     Action,
@@ -519,74 +515,3 @@ async def test_document_injection_cannot_expand_tools_or_reach_a_second_gateway_
     assert len(gateway.calls) == 1
     assert "run_user_code" not in serialized_trace
     assert injection not in serialized_trace
-
-
-class _GeminiModels:
-    def __init__(self, owner: "_GeminiClient") -> None:
-        self.owner = owner
-
-    async def generate_content(self, **kwargs: object) -> object:
-        self.owner.call = kwargs
-        return SimpleNamespace(
-            parsed={
-                "mode": "user_query",
-                "intent": "financial_lookup",
-                "domain": "portfolio_documents",
-                "entities": {},
-                "mentioned_scope_hints": {},
-                "result_requirement": "grounded_answer",
-                "required_evidence": ["financial_document"],
-                "required_capabilities": ["QUERY_DOCUMENTS"],
-                "ambiguities": [],
-                "risk_flags": [],
-                "evidence_status": "none",
-                "local_goal_status": "pending",
-                "global_goal_status": "pending",
-                "confidence": "0.9",
-                "reason_code": "QUERY_CLASSIFIED",
-                "clarification_question": None,
-                "rationale_summary": "Authorized evidence is required.",
-            }
-        )
-
-
-class _GeminiAsyncClient:
-    def __init__(self, owner: "_GeminiClient") -> None:
-        self.models = _GeminiModels(owner)
-
-    async def aclose(self) -> None:
-        return None
-
-
-class _GeminiClient:
-    instances: list["_GeminiClient"] = []
-
-    def __init__(self, **kwargs: object) -> None:
-        del kwargs
-        self.call: dict[str, object] | None = None
-        self.aio = _GeminiAsyncClient(self)
-        self.instances.append(self)
-
-
-@pytest.mark.asyncio
-async def test_gemini_rejects_coerced_output_and_has_no_tool_access(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _GeminiClient.instances.clear()
-    monkeypatch.setattr("app.agent.gemini.genai.Client", _GeminiClient)
-    provider = GeminiPerceptionProvider(
-        api_key="synthetic", model_name="gemini-test", timeout_seconds=1, max_output_tokens=256
-    )
-
-    with pytest.raises(AgentModelError) as raised:
-        await provider.perceive_user_query(query="Synthetic question")
-
-    assert raised.value.code == AgentModelErrorCode.INVALID_RESPONSE
-    call = _GeminiClient.instances[0].call
-    assert call is not None
-    config = call["config"]
-    assert isinstance(config, types.GenerateContentConfig)
-    assert config.tools is None
-    assert config.tool_config is None
-    assert config.thinking_config is not None
-    assert config.thinking_config.include_thoughts is False

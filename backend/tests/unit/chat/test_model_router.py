@@ -63,39 +63,45 @@ class _Provider:
 
 
 @pytest.mark.asyncio
-async def test_simple_request_uses_qwen_only() -> None:
-    qwen = _Provider("qwen3:8b")
-    kimi = _Provider("kimi-k3")
-    router = DeterministicRoutingLLMProvider(qwen=qwen, kimi=kimi, low_confidence_threshold=0.55)
+async def test_simple_request_uses_flash_lite_only() -> None:
+    simple = _Provider("google/gemini-3.1-flash-lite")
+    heavy = _Provider("google/gemini-3.7-flash")
+    router = DeterministicRoutingLLMProvider(
+        simple=simple, heavy=heavy, heavy_fallback=heavy, low_confidence_threshold=0.55
+    )
 
     generation = await router.generate(_request())
 
-    assert len(qwen.requests) == 1
-    assert not kimi.requests
-    assert generation.usage.model_name == "qwen3:8b"
+    assert len(simple.requests) == 1
+    assert not heavy.requests
+    assert generation.usage.model_name == "google/gemini-3.1-flash-lite"
     assert generation.usage.route_reason == "SIMPLE_LOW_RISK"
     assert not generation.usage.fallback_used
 
 
 @pytest.mark.asyncio
-async def test_multi_document_request_uses_kimi_and_never_downgrades() -> None:
-    qwen = _Provider("qwen3:8b")
-    kimi = _Provider("kimi-k3")
-    router = DeterministicRoutingLLMProvider(qwen=qwen, kimi=kimi, low_confidence_threshold=0.55)
+async def test_multi_document_request_uses_heavy_and_never_downgrades() -> None:
+    simple = _Provider("google/gemini-3.1-flash-lite")
+    heavy = _Provider("google/gemini-3.7-flash")
+    router = DeterministicRoutingLLMProvider(
+        simple=simple, heavy=heavy, heavy_fallback=heavy, low_confidence_threshold=0.55
+    )
 
     generation = await router.generate(_request(documents=2))
 
-    assert not qwen.requests
-    assert len(kimi.requests) == 1
-    assert generation.usage.model_name == "kimi-k3"
+    assert not simple.requests
+    assert len(heavy.requests) == 1
+    assert generation.usage.model_name == "google/gemini-3.7-flash"
     assert generation.usage.route_reason == "MULTI_DOCUMENT"
 
 
 @pytest.mark.asyncio
 async def test_router_derives_question_and_document_count_from_the_actual_request() -> None:
-    qwen = _Provider("qwen3:8b")
-    kimi = _Provider("kimi-k3")
-    router = DeterministicRoutingLLMProvider(qwen=qwen, kimi=kimi, low_confidence_threshold=0.55)
+    simple = _Provider("google/gemini-3.1-flash-lite")
+    heavy = _Provider("google/gemini-3.7-flash")
+    router = DeterministicRoutingLLMProvider(
+        simple=simple, heavy=heavy, heavy_fallback=heavy, low_confidence_threshold=0.55
+    )
     request = _request(documents=2)
     assert request.routing is not None
     mismatched = GroundedGenerationRequest(
@@ -111,37 +117,45 @@ async def test_router_derives_question_and_document_count_from_the_actual_reques
 
     generation = await router.generate(mismatched)
 
-    assert not qwen.requests
-    assert kimi.requests == [mismatched]
+    assert not simple.requests
+    assert heavy.requests == [mismatched]
     assert generation.usage.route_reason == "MULTI_DOCUMENT"
 
 
 @pytest.mark.asyncio
-async def test_qwen_timeout_falls_back_to_kimi_with_same_authorized_request() -> None:
-    qwen = _Provider("qwen3:8b", LLMProviderError(LLMErrorCode.TIMEOUT, transient=True))
-    kimi = _Provider("kimi-k3")
-    router = DeterministicRoutingLLMProvider(qwen=qwen, kimi=kimi, low_confidence_threshold=0.55)
+async def test_simple_timeout_falls_forward_once_with_same_authorized_request() -> None:
+    simple = _Provider(
+        "google/gemini-3.1-flash-lite",
+        LLMProviderError(LLMErrorCode.TIMEOUT, transient=True),
+    )
+    heavy = _Provider("google/gemini-3.7-flash")
+    router = DeterministicRoutingLLMProvider(
+        simple=simple, heavy=heavy, heavy_fallback=heavy, low_confidence_threshold=0.55
+    )
     request = _request()
 
     generation = await router.generate(request)
 
-    assert qwen.requests == [request]
-    assert kimi.requests == [request]
-    assert generation.usage.model_name == "kimi-k3"
+    assert simple.requests == [request]
+    assert heavy.requests == [request]
+    assert generation.usage.model_name == "google/gemini-3.7-flash"
     assert generation.usage.route_reason == "SIMPLE_LOW_RISK"
     assert generation.usage.fallback_used
-    assert generation.usage.fallback_reason == "QWEN_TIMEOUT"
+    assert generation.usage.fallback_reason == "SIMPLE_MODEL_TIMEOUT"
+    assert generation.usage.retry_count == 1
 
 
 @pytest.mark.asyncio
-async def test_qwen_rejection_does_not_fallback() -> None:
-    qwen = _Provider("qwen3:8b", LLMProviderError(LLMErrorCode.REJECTED))
-    kimi = _Provider("kimi-k3")
-    router = DeterministicRoutingLLMProvider(qwen=qwen, kimi=kimi, low_confidence_threshold=0.55)
+async def test_simple_rejection_does_not_fallback() -> None:
+    simple = _Provider("google/gemini-3.1-flash-lite", LLMProviderError(LLMErrorCode.REJECTED))
+    heavy = _Provider("google/gemini-3.7-flash")
+    router = DeterministicRoutingLLMProvider(
+        simple=simple, heavy=heavy, heavy_fallback=heavy, low_confidence_threshold=0.55
+    )
 
     with pytest.raises(LLMProviderError) as raised:
         await router.generate(_request())
 
-    assert raised.value.model_name == "qwen3:8b"
+    assert raised.value.model_name == "google/gemini-3.1-flash-lite"
     assert raised.value.route_reason == "SIMPLE_LOW_RISK"
-    assert not kimi.requests
+    assert not heavy.requests

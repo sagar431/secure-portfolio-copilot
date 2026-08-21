@@ -42,6 +42,9 @@ export const groundedAnswerData: GroundedAnswerData = {
     },
   ],
   limitations: ['The answer covers the approved reporting period only.'],
+  model_name: 'Gemini 3.1 Flash Lite',
+  route_reason: 'SIMPLE_LOW_RISK',
+  fallback_used: false,
 }
 
 export const insufficientAnswerData: GroundedAnswerData = {
@@ -53,6 +56,9 @@ export const insufficientAnswerData: GroundedAnswerData = {
   claims: [],
   citations: [],
   limitations: ['No supported evidence matched the question.'],
+  model_name: null,
+  route_reason: null,
+  fallback_used: false,
 }
 
 export const agentRunData: AgentRunData = {
@@ -105,6 +111,8 @@ export const agentRunData: AgentRunData = {
       reason_code: 'COMPLETED',
     },
   ],
+  model_name: 'Gemini 3.7 Flash',
+  route_reason: 'AGENTIC_REQUEST',
 }
 
 const calculationCitations = [

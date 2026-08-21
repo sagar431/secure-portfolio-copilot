@@ -5,10 +5,10 @@
 Playbook Steps 7 through 9 plus all three interview features are implementation-complete. Step 7
 provides the embedded approved MCP gateway and two authorization-revalidating document tools; Step
 8 provides separate typed Perception and Decision
-stages plus the host-owned bounded AgentLoop. The Step 6 grounded path remains intact. Live Runpod
-Kimi Perception, typed-catalog Decision, and grounded final-answer contracts pass. Simple,
-single-document, high-confidence grounded answers route to Mac Ollama `qwen3:8b`; complex,
-multi-document, low-confidence, and all agentic stages route to Runpod `kimi-k3`. Scoped private,
+stages plus the host-owned bounded AgentLoop. The Step 6 grounded path remains intact. Simple,
+single-document, high-confidence grounded answers route to `google/gemini-3.1-flash-lite`; complex,
+multi-document, low-confidence, and all agentic stages route to `google/gemini-3.7-flash`. Both use
+OpenRouter through the pinned Google Vertex BYOK connection with shared fallback disabled. Scoped private,
 Finance, Legal, and Shared memory is source-reauthorized before retrieval. Step 9 adds three fixed
 financial calculators whose inputs are reauthorized and whose arithmetic/finalization is host-owned.
 
@@ -19,11 +19,12 @@ financial calculators whose inputs are reauthorized and whose arithmetic/finaliz
   rules; no model, prompt, identity claim, or client field can choose authority or override a route.
   The router derives the question and distinct-document count from the actual authorized generation
   request, so inconsistent internal signal metadata cannot downgrade multi-document work.
-- The Qwen adapter is pinned to `http://192.168.31.213:11434` and `qwen3:8b`, disables environment
-  proxy inheritance, tools, streaming, and thinking, validates strict grounded JSON, rejects visible
-  thinking markers, and has its own timeout. Retryable Qwen failures may fall forward to Kimi;
-  Kimi-first work never downgrades to Qwen.
-- Agent Perception, Decision, and finalization remain explicitly pinned to Kimi in router mode.
+- The shared OpenRouter Vertex client pins the exact HTTPS endpoint, `google-vertex` provider, and
+  both Gemini model IDs. It disables environment proxy inheritance, provider fallback, tools,
+  streaming, and reasoning parameters, then validates visible JSON strictly. Retryable Gemini 3.1
+  Flash Lite failures may fall forward to Gemini 3.7 Flash;
+  Gemini 3.7 Flash-first work never downgrades to Gemini 3.1 Flash Lite.
+- Agent Perception, Decision, and finalization are explicitly pinned to Gemini 3.7 Flash.
   Authorized evidence objects are reused unchanged on fallback. Migration `20260821_0007` records
   only the actual model, allow-listed route/fallback reason codes, and a fallback flag.
 - Migration `20260821_0008` adds tenant/company-scoped `memories` and immutable copied-provenance
@@ -72,12 +73,12 @@ financial calculators whose inputs are reauthorized and whose arithmetic/finaliz
   as JSON. Evidence excerpts are explicitly labeled untrusted quoted data. The system instruction
   says document commands, role changes, prompt text, URLs, files, tools, web search, code execution,
   outside knowledge, and hidden assumptions must be ignored.
-- `LLMProvider` has Gemini and OpenAI-compatible Runpod Kimi adapters, a deterministic fake-test
-  adapter, and a disabled adapter. The Kimi path fixes the approved base URL and `kimi-k3`, sends
-  temperature exactly `1`, requires at least 1,024 output tokens, requests structured JSON, and
-  permits at most two total calls for one transient, malformed, or incomplete response. Empty
-  content ending for length is incomplete. `reasoning_content` is deleted at the provider boundary
-  and is never returned, persisted, logged, or rendered. No model tool capability is configured.
+- `LLMProvider` has separate simple and heavy adapters over one typed OpenRouter Vertex client, plus
+  deterministic fake-test and disabled adapters. The provider request does not send JSON-schema
+  response format or reasoning parameters. System prompts require JSON only; strict local Pydantic
+  validation and retries share a two-call ceiling. Empty content ending for length is incomplete.
+  Provider bodies and hidden fields are never returned, persisted, logged, or rendered. No model
+  tool capability is configured.
 - Provider output is treated as untrusted. A supported response must have non-empty bounded claims;
   every claim must cite one or more unique retrieved evidence IDs; unknown or fabricated IDs fail
   closed. Citation DTOs are reconstructed by the host from the corresponding retrieved row and
@@ -136,8 +137,8 @@ financial calculators whose inputs are reauthorized and whose arithmetic/finaliz
 ## Acceptance criteria
 
 The combined three-feature gate passes. The full database-backed suite covers authorized agent and
-calculator API workflows. Live Runpod Kimi Perception, typed-catalog Decision, and grounded
-finalization pass. The dual-route smoke selected Qwen for the simple one-document case and Kimi for
+calculator API workflows. Live OpenRouter Vertex Perception, typed-catalog Decision, and grounded
+finalization pass. The dual-route smoke selected Gemini 3.1 Flash Lite for the simple one-document case and Gemini 3.7 Flash for
 the multi-document case; both returned supported claims without fallback. Backend/frontend, local
 MCP, migration, security, dependency, build, and repository-integrity gates pass.
 
@@ -173,36 +174,34 @@ and agent state-machine tests, strict schema derivation, unrestricted-execution 
 trace-redaction gates pass. Steps 7 and 8 add no migration; the existing
 `0006 -> 0005 -> 0006` reversibility and drift cycle remains green.
 Live Gemini initially exposed and helped correct a dropped `Literal` constraint in the provider
-schema transformation, then quota blocked the full chain. The Runpod replacement was live-verified
-with the exact Kimi endpoint/model: initial Perception classified a financial lookup, initial
+schema transformation, then quota blocked the full chain. The OpenRouter replacement was live-verified
+with the exact Gemini 3.7 Flash endpoint/model: initial Perception classified a financial lookup, initial
 Decision returned a strict valid two-step plan selecting the sole permitted search tool,
 step-result Perception marked synthetic authorized evidence sufficient, mid-session Decision chose
 `FINALIZE`, and finalization returned one supported host-validatable cited claim with zero retry. A
 nondeterministic malformed Decision was
-observed once at Kimi's required temperature; validation failed closed, and the implementation now
+observed once at Gemini 3.7 Flash's required temperature; validation failed closed, and the implementation now
 places malformed/incomplete responses inside the same strict two-attempt total budget as transient
 failures.
 
 All three interview features were independently checkpointed and jointly verified on 2026-08-21.
-Backend Ruff format/lint, strict mypy, and all 301 pytest cases pass. Frontend Prettier, ESLint,
+Backend Ruff format/lint, strict mypy, and all 302 pytest cases pass. Frontend Prettier, ESLint,
 strict TypeScript, all 98 Vitest cases, the zero-vulnerability npm audit, and production build pass.
 Migration `0008 -> 0006 -> 0008` exercises both router and memory revisions and finishes at head
-with no schema drift. The live router smoke returned Qwen `SIMPLE_LOW_RISK` and Kimi
+with no schema drift. The live router smoke returned Gemini 3.1 Flash Lite `SIMPLE_LOW_RISK` and Gemini 3.7 Flash
 `MULTI_DOCUMENT`, each supported with no fallback. Calculator integration proves exact 10% EBITDA
 margin, 25% revenue growth, and 3% net profit margin plus missing, malformed, zero-denominator, and
 authorization failures.
 The completion audit additionally verifies paired multi-company scope construction,
 database-resolved company-matched chat memory, copied source document/version integrity,
 actual-request-derived router signals, and agentic route-reason persistence. A fresh live smoke
-again returned supported Qwen `SIMPLE_LOW_RISK` and Kimi `MULTI_DOCUMENT` responses without
+again returned supported Gemini 3.1 Flash Lite `SIMPLE_LOW_RISK` and Gemini 3.7 Flash `MULTI_DOCUMENT` responses without
 fallback.
 
 ## Known limitations
 
-- The Mac Qwen endpoint is development-only plaintext HTTP on a pinned private-LAN address. It is
-  rejected in production; a production deployment requires an authenticated, encrypted approved
-  economical-model endpoint. The retrieval score threshold is a deterministic routing heuristic,
-  not a calibrated probability.
+- The retrieval score threshold is a deterministic routing heuristic, not a calibrated probability.
+  Vertex BYOK currently requires prompt-only JSON enforcement followed by strict local validation.
 
 - Authorization is a database-derived request-start snapshot. Grant changes are enforced on the
   next request; the application does not replace that snapshot during an in-flight request between
@@ -244,7 +243,7 @@ fallback.
 ## Test commands
 
 See [docs/testing-guide.md](docs/testing-guide.md) for the exact backend, frontend, migration,
-fake-provider, live Runpod Kimi, chat/API/UI, authorization, redaction, and failure checks.
+fake-provider, live OpenRouter Vertex, chat/API/UI, authorization, redaction, and failure checks.
 
 ## Next approved step
 

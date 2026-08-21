@@ -1,7 +1,7 @@
 # Step 9 + Interview Features Testing Guide
 
 Run commands from the locations shown. Tests use only synthetic identities and an isolated tmpfs
-PostgreSQL test service. On 2026-08-21 these commands passed with 301 backend tests and 98
+PostgreSQL test service. On 2026-08-21 these commands passed with 302 backend tests and 98
 frontend tests. Automated tests configure deterministic fake embedding, LLM, Perception, Decision,
 and MCP adapters and require neither Ollama, a live model provider, a provider key, nor network access.
 
@@ -12,15 +12,15 @@ cd backend
 uv run pytest -q \
   tests/unit/model_routing \
   tests/unit/chat/test_model_router.py \
-  tests/unit/test_ollama_qwen_provider.py \
-  tests/unit/test_runpod_kimi_provider.py \
+  tests/unit/test_openrouter_vertex_provider.py \
   tests/security/test_chat_security.py \
   tests/security/test_agent_security.py
 ```
 
 These tests prove deterministic simple/complex/multi-document/low-confidence/agentic selection,
-one-way fallback, exact authorized-request reuse, pinned Qwen transport, no tools or thinking,
-strict output validation, content-free failures, and Kimi-only agent stages/finalization.
+one-way fallback, exact authorized-request reuse, pinned Vertex-only transport, absence of tools,
+JSON-schema response format and reasoning parameters, strict output validation, content-free
+failures, and heavy-model-only agent stages/finalization.
 
 ## Focused scoped-memory checks
 
@@ -159,7 +159,7 @@ npm run test -- --run \
 These checks use only fake providers. They prove call ordering and boundary behavior: retrieval
 precedes generation; missing capability and recognizable cross-scope targets call neither provider;
 document injection remains quoted untrusted JSON; provider configuration has no tools; a transient,
-malformed, or incomplete Kimi response gets no more than one retry; citations are
+malformed, or incomplete Gemini 3.7 Flash response gets no more than one retry; citations are
 rebuilt only from retrieved provenance; malformed/fabricated references abstain; and logs do not
 contain key, question, excerpt, prompt, answer, provider body, or reasoning markers.
 
@@ -266,44 +266,24 @@ Then start the backend with `EMBEDDING_PROVIDER=ollama`. A non-loopback, HTTPS, 
 query-bearing, or fragment-bearing `OLLAMA_BASE_URL` must fail settings validation. Do not use the
 fake provider to claim live-model retrieval quality.
 
-## Live Runpod Kimi provider check
+## Live OpenRouter Vertex provider check
 
-This is separate from automated tests. Put `RUNPOD_API_KEY` only in the ignored root `.env`; never
+This is separate from automated tests. Put `OPENROUTER_API_KEY` only in the ignored root `.env`; never
 place it in a command, argument, log statement, test fixture, or captured artifact. Settings must
-retain `LLM_PROVIDER=runpod`, the exact base URL
-`https://api.runpod.ai/v2/moonshot-kimi/openai/v1`, model `kimi-k3`, and at least 1,024 output tokens.
+retain `LLM_PROVIDER=openrouter_vertex`, the exact base URL, `google-vertex` provider slug, and both
+pinned model IDs.
 
 Run the checked-in content-free contract smoke from `backend`:
 
 ```bash
-uv run python -m app.scripts.live_runpod_kimi_smoke
+uv run python -m app.scripts.live_openrouter_vertex_smoke
 ```
 
-It exercises initial Perception and Decision, feeds a synthetic successful authorized observation
-through step-result Perception and mid-session Decision, then runs grounded finalization. It prints
-only provider/model identifiers, enum metadata, plan/claim counts, citation validity, and retry
-count—never the key, question, prompts, evidence, answer text, token counts, provider body, or
-`reasoning_content`.
-
-The verified 2026-08-21 run returned valid financial Perception, a valid two-step Decision selecting
-`portfolio.search_authorized_documents`, sufficient step-result Perception, a valid mid-session
-`FINALIZE`, and `final_status=supported` with one cited claim, `final_claims_cited=true`, and
-`final_retry_count=0`. This proves live endpoint/model connectivity and both modes of the structured
-stages plus finalization for one synthetic case. It does not prove broad faithfulness, latency,
-cost, or availability. Never substitute fake output for this live gate.
-
-## Live dual-model router check
-
-Keep the pinned Mac Ollama endpoint running with `qwen3:8b`, retain the ignored local Runpod key,
-select `LLM_PROVIDER=router`, and run from `backend`:
-
-```bash
-uv run python -m app.scripts.live_model_router_smoke
-```
-
-The first synthetic authorized request must report `qwen3:8b/SIMPLE_LOW_RISK`; the second must
-report `kimi-k3/MULTI_DOCUMENT`. Output is bounded metadata only and must contain no credential,
-question, evidence, answer, token count, provider payload, or reasoning.
+It exercises a Flash Lite strict grounded contract plus separate Flash Perception and Decision
+contracts. Each line contains only the model name, provider, BYOK flag, finish reason, validation
+status, latency, token counts, inference cost, and safe error code. Every line must report Google,
+`is_byok=true`, and zero upstream inference cost. It never prints the key, prompt, completion,
+evidence, provider body, or reasoning. Never substitute fake output for this live gate.
 
 ## Live smoke test
 
@@ -561,7 +541,7 @@ refresh.
   Do not weaken authorization, relevance, provenance, or citation checks to force an answer.
 - Chat returns `llm_timeout`/HTTP 504: check safe request/trace metadata and local connectivity. Do
   not log the key, prompt, question, evidence, provider body, answer, or reasoning.
-- Chat returns `llm_unavailable`/HTTP 503: confirm the ignored `.env` selects Runpod and has a local
+- Chat returns `llm_unavailable`/HTTP 503: confirm the ignored `.env` selects OpenRouter and has a local
   key, then rerun only the content-free synthetic provider smoke. The service intentionally has no
   partial answer or alternate ungrounded fallback.
 - A conversation remains after reload but its transcript is empty: this is the honest Step 6 API

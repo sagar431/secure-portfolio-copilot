@@ -4,8 +4,8 @@ from enum import StrEnum
 
 
 class ModelRoute(StrEnum):
-    QWEN = "qwen"
-    KIMI = "kimi"
+    SIMPLE = "simple"
+    HEAVY = "heavy"
 
 
 class WorkloadKind(StrEnum):
@@ -58,14 +58,14 @@ def route_model(signals: RoutingSignals, *, low_confidence_threshold: float) -> 
     """Choose a model from host-owned signals; never identity or authorization claims."""
 
     if signals.workload is WorkloadKind.AGENTIC:
-        return RoutingDecision(ModelRoute.KIMI, RouteReason.AGENTIC_REQUEST)
+        return RoutingDecision(ModelRoute.HEAVY, RouteReason.AGENTIC_REQUEST)
     if signals.authorized_document_count > 1:
-        return RoutingDecision(ModelRoute.KIMI, RouteReason.MULTI_DOCUMENT)
+        return RoutingDecision(ModelRoute.HEAVY, RouteReason.MULTI_DOCUMENT)
     if (
         signals.top_retrieval_score is None
         or signals.top_retrieval_score < low_confidence_threshold
     ):
-        return RoutingDecision(ModelRoute.KIMI, RouteReason.LOW_CONFIDENCE)
+        return RoutingDecision(ModelRoute.HEAVY, RouteReason.LOW_CONFIDENCE)
     if _is_complex(signals.question):
-        return RoutingDecision(ModelRoute.KIMI, RouteReason.COMPLEX_REQUEST)
-    return RoutingDecision(ModelRoute.QWEN, RouteReason.SIMPLE_LOW_RISK)
+        return RoutingDecision(ModelRoute.HEAVY, RouteReason.COMPLEX_REQUEST)
+    return RoutingDecision(ModelRoute.SIMPLE, RouteReason.SIMPLE_LOW_RISK)

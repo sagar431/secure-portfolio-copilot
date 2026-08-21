@@ -32,6 +32,9 @@ export function GroundedAnswer({
         <p className="eyebrow">Insufficient evidence</p>
         <h3>I can’t support an answer from authorized documents</h3>
         <p className="answer-copy">{response.answer}</p>
+        {response.model_name ? (
+          <p className="model-route">Model route: {response.model_name}</p>
+        ) : null}
         {response.limitations.length > 0 ? (
           <ul className="limitation-list">
             {response.limitations.map((limitation) => (
@@ -49,6 +52,12 @@ export function GroundedAnswer({
   return (
     <article className="answer-card">
       <p className="eyebrow">Grounded answer</p>
+      {response.model_name ? (
+        <p className="model-route">
+          Model route: {response.model_name}
+          {response.fallback_used ? ' (safe fallback)' : ''}
+        </p>
+      ) : null}
       <p className="answer-copy">{response.answer}</p>
       <section className="supported-claims" aria-label="Supported claims">
         <h3>Claims and citations</h3>

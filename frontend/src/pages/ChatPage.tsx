@@ -121,6 +121,9 @@ function agentAnswer(run: AgentRunData): GroundedAnswerData {
     claims: run.claims,
     citations: run.citations,
     limitations: run.limitations,
+    model_name: run.model_name,
+    route_reason: run.route_reason,
+    fallback_used: false,
   }
 }
 

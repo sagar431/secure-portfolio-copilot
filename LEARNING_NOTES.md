@@ -492,11 +492,9 @@ model input and the final host validator remains essential.
 
 `LLMProvider` separates orchestration from the configured adapter. Automated tests use
 `DeterministicFakeLLMProvider`; they never require a key or network. The real adapter uses the
-official pinned `google-genai` SDK and `gemini-3.7-flash` with medium thinking, thoughts excluded,
-temperature zero, one candidate, JSON structured output, a 1,024-token default output limit, a
-30-second default timeout, SDK attempts set to one, and at most one explicit transient retry. No
-tools or tool configuration are supplied, so Gemini cannot browse, execute code, fetch URLs, search
-files, or use a computer through this application.
+pinned OpenRouter endpoint and Google Vertex BYOK connection, bounded output and timeout settings,
+and a two-call ceiling. It sends no tools, response schema, or reasoning parameters, so the models
+cannot browse, execute code, fetch URLs, search files, or use a computer through this application.
 
 ### Database and trace flow
 
@@ -687,39 +685,36 @@ properties; strict local validation remains the final boundary. Shared scope-tar
 home-tenant resolution now live in `chat/scope_guard.py`, so the agent no longer imports private
 helpers from the grounded-chat service.
 
-### Why Kimi needs a provider-specific boundary
+### Why OpenRouter Vertex needs a provider-specific boundary
 
-Runpod exposes Kimi through the OpenAI-compatible base URL
-`https://api.runpod.ai/v2/moonshot-kimi/openai/v1` with model ID `kimi-k3`. Kimi K3 requires
-temperature exactly `1`; unlike the Gemini path, lowering temperature is not a valid determinism
-control. Reasoning consumes the same output budget, so settings reject fewer than 1,024 output
-tokens. An empty visible answer with `finish_reason=length` is an incomplete provider response, not
-a successful empty answer.
+OpenRouter exposes both Gemini models through `https://openrouter.ai/api/v1`. The request pins
+`google-vertex`, disables shared fallback, and denies data collection. The verified Vertex BYOK
+route accepts ordinary Chat Completions but rejects the strict JSON-schema response format used by
+the previous provider boundary, so this adapter does not send `response_format`, reasoning, or
+reasoning-effort fields.
 
-`reasoning_content` is transport metadata that the application does not need. The adapter deletes
-it immediately before visible-output validation and never places it in a domain object, exception,
-trace, log, response, or persistent model. Visible JSON remains untrusted and must pass the same
-strict Pydantic contracts as every other provider. One malformed live Decision demonstrated why
-server-side JSON schema guidance is not enough: the host failed closed. Malformed, incomplete, and
-transient responses now share one total two-call budget, preventing nested retry layers from
-silently producing three or four upstream calls.
+System prompts require JSON only, and the transport copies only visible `message.content`.
+Pydantic then rejects Markdown fences, extra or missing fields, coercion, malformed JSON, and
+incomplete output. Transient and invalid responses share one total two-call budget, preventing
+nested retry layers from silently producing three or four upstream calls.
 
 Step 9 is implemented by interview feature 3 below.
 
-## Interview feature 1 — Deterministic Qwen/Kimi model routing
+## Interview feature 1 — Deterministic Gemini 3.1 Flash Lite/Gemini 3.7 Flash model routing
 
 ### What problem this feature solves
 
-It sends simple authorized work to a local economical model while reserving the stronger provider
+It sends simple authorized work to the economical model while reserving the stronger model
 for complex or risky workloads without letting either model influence authorization or routing.
 
 ### Backend flow
 
 Authorization and hybrid retrieval finish first. Pure Python then examines workload kind, distinct
 authorized source documents, the top authorized score, and bounded comparison/complexity markers.
-Simple one-document high-confidence generation uses Mac `qwen3:8b`; multi-document,
-low-confidence, complex, and all agent stages use Runpod `kimi-k3`. Retryable Qwen failure may fall
-forward to Kimi with the identical evidence tuple. Host citation validation remains unchanged.
+Simple one-document high-confidence generation uses `google/gemini-3.1-flash-lite`; multi-document,
+low-confidence, complex, and all agent stages use `google/gemini-3.7-flash`. Both use OpenRouter
+with Google Vertex BYOK and no shared fallback. Retryable Gemini 3.1 Flash Lite failure may fall
+forward to Gemini 3.7 Flash with the identical evidence tuple. Host citation validation remains unchanged.
 
 ### Heuristic versus LLM ownership
 
@@ -730,13 +725,13 @@ authorized evidence. No hidden reasoning is retained or shown.
 ### Security invariant
 
 Routing never widens scope: forbidden candidates cannot become a routing signal or model context,
-and Kimi-routed work never downgrades to Qwen. Authorization denial and missing evidence invoke no
+and Gemini 3.7 Flash-routed work never downgrades to Gemini 3.1 Flash Lite. Authorization denial and missing evidence invoke no
 generation model.
 
 ### Current limitation
 
-The pinned Mac endpoint uses private-LAN HTTP and is development-only. The score cutoff is a stable
-heuristic rather than a calibrated confidence probability.
+The score cutoff is a stable heuristic rather than a calibrated confidence probability. Vertex
+BYOK currently requires prompt-only JSON enforcement followed by strict local validation.
 
 ## Interview feature 2 — Source-inheriting scoped memory
 

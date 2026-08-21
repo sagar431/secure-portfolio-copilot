@@ -4,9 +4,22 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.openrouter_vertex import OPENROUTER_HEAVY_MODEL, OPENROUTER_SIMPLE_MODEL
+
 
 def _normalize(value: str) -> str:
     return " ".join(value.split())
+
+
+SafeModelName = Literal["Gemini 3.1 Flash Lite", "Gemini 3.7 Flash"]
+
+
+def safe_model_name(model_name: str) -> SafeModelName | None:
+    if model_name == OPENROUTER_SIMPLE_MODEL:
+        return "Gemini 3.1 Flash Lite"
+    if model_name == OPENROUTER_HEAVY_MODEL:
+        return "Gemini 3.7 Flash"
+    return None
 
 
 class CreateConversationRequest(BaseModel):
@@ -84,6 +97,9 @@ class GroundedMessageData(BaseModel):
     claims: tuple[GroundedClaimData, ...]
     citations: tuple[GroundedCitationData, ...]
     limitations: tuple[str, ...]
+    model_name: SafeModelName | None
+    route_reason: str | None
+    fallback_used: bool
 
 
 class CalculationInputData(BaseModel):
@@ -148,3 +164,5 @@ class AgentRunMessageData(BaseModel):
     replan_count: int = Field(ge=0)
     retry_count: int = Field(ge=0)
     trace: tuple[AgentTraceEventData, ...]
+    model_name: SafeModelName | None
+    route_reason: str | None

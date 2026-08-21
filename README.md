@@ -6,8 +6,10 @@ database-revalidated identity, governed PDF/XLSX/CSV ingestion, and authorizatio
 retrieval, it provides both the Step 6 non-agentic grounded chat and a bounded single-agent path.
 The agent separates Perception and Decision, invokes five approved document/calculator tools through an
 embedded MCP gateway with host-injected authorization, and preserves Step 6 citation validation.
-Simple authorized grounded requests use Mac Ollama `qwen3:8b`; complex, multi-document,
-low-confidence, and agentic work uses Runpod `kimi-k3`. Private-user, Finance, Legal, and Shared
+Simple authorized grounded requests use `google/gemini-3.1-flash-lite`; complex, multi-document,
+low-confidence, and agentic work uses `google/gemini-3.7-flash`. Both generation models are reached
+through OpenRouter using the pinned Google Vertex BYOK connection, with shared fallback disabled.
+Private-user, Finance, Legal, and Shared
 memory is filtered and source-reauthorized before retrieval. Three fixed financial metrics are
 computed from reauthorized spreadsheet cells by host code. The project contains no arbitrary
 execution, multi-agent system, or cloud deployment.
@@ -20,7 +22,7 @@ execution, multi-agent system, or cloud deployment.
 - Docker with Docker Compose
 - [Ollama](https://ollama.com/) for the live development embedding smoke test. Automated tests use a
   deterministic fake provider and do not require Ollama.
-- A Runpod API key in the ignored local `.env` for live Kimi Perception, Decision, and grounded
+- An OpenRouter API key in the ignored local `.env` for live Perception, Decision, and grounded
   final-answer checks. Automated tests use deterministic fake providers and need no network key.
 
 ## One-time setup
@@ -66,17 +68,17 @@ a production embedding deployment.
 Add the model-router settings to the ignored local `.env`:
 
 ```dotenv
-LLM_PROVIDER=router
-RUNPOD_API_KEY=replace-with-a-local-runpod-key
-RUNPOD_BASE_URL=https://api.runpod.ai/v2/moonshot-kimi/openai/v1
-RUNPOD_MODEL_NAME=kimi-k3
-QWEN_BASE_URL=http://192.168.31.213:11434
-QWEN_MODEL_NAME=qwen3:8b
-QWEN_TIMEOUT_SECONDS=15
-QWEN_MAX_OUTPUT_TOKENS=1024
-ROUTER_LOW_CONFIDENCE_THRESHOLD=0.55
-LLM_TIMEOUT_SECONDS=60
-LLM_MAX_OUTPUT_TOKENS=1024
+LLM_PROVIDER=openrouter_vertex
+OPENROUTER_API_KEY=replace-with-a-local-openrouter-key
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_PROVIDER=google-vertex
+OPENROUTER_SIMPLE_MODEL=google/gemini-3.1-flash-lite
+OPENROUTER_HEAVY_MODEL=google/gemini-3.7-flash
+OPENROUTER_SIMPLE_TIMEOUT_SECONDS=30
+OPENROUTER_HEAVY_TIMEOUT_SECONDS=60
+OPENROUTER_SIMPLE_MAX_OUTPUT_TOKENS=1024
+OPENROUTER_HEAVY_MAX_OUTPUT_TOKENS=1536
+ROUTER_LOW_CONFIDENCE_THRESHOLD=0.40
 LLM_MAX_EVIDENCE_CHUNKS=5
 AGENT_MAX_STEPS=4
 AGENT_MAX_REPLANS=1
@@ -86,15 +88,17 @@ AGENT_TOOL_TIMEOUT_SECONDS=10
 AGENT_TOOL_MAX_TRANSIENT_RETRIES=1
 ```
 
-Both endpoints and model IDs are fixed by settings validation. Qwen is a development-only LAN
-endpoint with tools/thinking disabled and strict structured output. Kimi requires temperature
-exactly `1` and at least 1,024 output tokens because reasoning consumes the same output budget. The
-adapter deletes `reasoning_content` at the provider boundary, never exposes it, strictly validates
-visible JSON with Pydantic, and permits at most two total calls for a transient, malformed, or
-incomplete response. Empty content with `finish_reason=length` is incomplete, never success.
-`fake` is deterministic test infrastructure and is rejected in production; `disabled` fails closed.
-Gemini remains an optional compatible provider. Never pass or print either provider key on a
-command line; load it only from the ignored `.env`.
+The endpoint, provider slug, and both model IDs are fixed by settings validation. Every request
+forces `google-vertex`, disables provider fallback, and denies data collection. The adapter sends no
+tools, JSON-schema `response_format`, reasoning, or reasoning-effort parameters. System instructions
+require JSON only; visible `message.content` is validated strictly with Pydantic. Markdown fences,
+extra or missing fields, coercion, malformed JSON, and incomplete output fail closed. A logical
+operation makes at most two provider calls. `fake` is deterministic test infrastructure and is
+rejected in production; `disabled` fails closed. Never pass or print the key on a command line; load
+it only from the ignored `.env`.
+
+Ollama remains configured only for `nomic-embed-text` embeddings. Kimi and Qwen generation are no
+longer part of the active architecture.
 
 The checked-in environment example contains development-only values. Do not use its database
 password in a shared or production environment. `.env` is ignored by Git.
@@ -190,11 +194,11 @@ npm audit --audit-level=high
 npm run build
 ```
 
-The current implementation passes 301 backend tests and 98 frontend Vitest tests, plus backend
-format/lint/strict-type gates. Live Runpod Kimi initial/step-result
+The current implementation passes 302 backend tests and 98 frontend Vitest tests, plus backend
+format/lint/strict-type gates. Live OpenRouter Vertex initial/step-result
 Perception, initial/mid-session Decision, and grounded final-answer contracts pass against
-`kimi-k3`; the final answer contained one host-validatable cited claim with no retry. The final
-dual-route smoke selected `qwen3:8b` for a simple one-document request and `kimi-k3` for a
+`google/gemini-3.7-flash`; the final answer contained one host-validatable cited claim with no retry. The final
+dual-route smoke selected `google/gemini-3.1-flash-lite` for a simple one-document request and `google/gemini-3.7-flash` for a
 multi-document request; both returned supported claims without fallback. See the
 testing guide for focused fake-provider, MCP/agent/calculator, redaction, migration-cycle, and live
 provider checks.
@@ -219,29 +223,27 @@ docker compose exec -T db psql -U portfolio -d portfolio \
   -c "SELECT extname, extversion FROM pg_extension WHERE extname = 'vector';"
 ```
 
-For the live Step 5 provider check, run `ollama serve` in another terminal (or use the Ollama
+For the live Step 5 embedding check, run `ollama serve` in another terminal (or use the Ollama
 desktop service), then run `ollama pull nomic-embed-text:v1.5` in a separate shell before starting
-the backend. Run `uv run python -m app.scripts.live_runpod_kimi_smoke` separately from `backend`;
-it prints only bounded contract metadata and never prints the key, prompts, evidence, answer text,
-token counts, provider body, or reasoning. Automated tests use no live provider.
-
-For the final live dual-route contract check, keep Mac Ollama running with `qwen3:8b` and run from
+the backend. For both live generation models and the heavy Perception/Decision contracts, run from
 `backend`:
 
 ```bash
-uv run python -m app.scripts.live_model_router_smoke
+uv run python -m app.scripts.live_openrouter_vertex_smoke
 ```
 
-The smoke prints only model/route/status/count/latency metadata. It never prints credentials,
-questions, evidence, answers, provider bodies, token counts, or model reasoning.
+The smoke prints only model, provider, BYOK status, finish reason, strict-validation status,
+latency, token counts, inference cost, and a safe error code. It verifies `provider=Google`,
+`is_byok=true`, and zero upstream inference cost without printing credentials, prompts,
+completions, evidence, provider bodies, or reasoning.
 
 ## Deterministic model routing
 
 Routing runs in backend code only after authorization-first retrieval. Simple, high-confidence,
-single-document grounded answers use Qwen. Multi-document evidence, low retrieval confidence,
-bounded complex/comparison language, and every AgentLoop stage use Kimi. A retryable Qwen timeout,
-transport failure, or invalid structured response may fall forward to Kimi using the exact same
-authorized evidence. Kimi work never falls back to Qwen, and authorization denial/no-evidence paths
+single-document grounded answers use Gemini 3.1 Flash Lite. Multi-document evidence, low retrieval confidence,
+bounded complex/comparison language, and every AgentLoop stage use Gemini 3.7 Flash. A retryable Gemini 3.1 Flash Lite timeout,
+transport failure, or invalid structured response may fall forward to Gemini 3.7 Flash using the exact same
+authorized evidence. Gemini 3.7 Flash work never falls back to Gemini 3.1 Flash Lite, and authorization denial/no-evidence paths
 call neither model. Sanitized traces store the actual model and categorical route/fallback reason,
 never model rationale or chain-of-thought.
 
@@ -356,9 +358,9 @@ The service performs a deterministic preflight for recognizable unauthorized ten
 department targets, then calls the Step 5 `AuthorizedSearchService`. Only sufficient rows returned
 through its database-derived authorization and lifecycle filters become prompt evidence. At most
 five rows are serialized as `authorized_untrusted_evidence`; document strings are quoted JSON data,
-not instructions. The selected adapter requests bounded structured JSON and configures no tools or
-tool access. The Runpod path fixes the exact Kimi endpoint/model, temperature `1`, and a minimum
-1,024-token output budget; visible output is strictly validated and hidden reasoning is discarded.
+not instructions. The selected adapter requests JSON-only output and configures no tools or tool
+access. The OpenRouter path fixes the exact endpoint, Vertex provider, and model ID; visible output
+is strictly validated and all non-content response fields are discarded at the transport boundary.
 
 The model returns claim text and evidence IDs, not trusted citation objects. Host validation requires
 every supported claim to reference retrieved IDs and rebuilds citations from those exact evidence

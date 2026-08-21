@@ -1,11 +1,9 @@
 import json
 import logging
 from types import SimpleNamespace
-from typing import Any
 from uuid import uuid4
 
 import pytest
-from google.genai import types
 from pydantic import SecretStr, ValidationError
 
 from app.chat.contracts import (
@@ -19,7 +17,6 @@ from app.chat.contracts import (
     LLMProviderError,
     LLMUsage,
 )
-from app.chat.gemini import GeminiLLMProvider
 from app.chat.prompt import SYSTEM_INSTRUCTION, build_grounded_prompt
 from app.chat.service import (
     GroundedChatService,
@@ -265,27 +262,21 @@ def test_fake_llm_is_rejected_in_production_and_live_providers_require_keys() ->
     with pytest.raises(ValidationError, match="fake LLM provider"):
         _settings(app_env="production", embedding_provider="disabled", llm_provider="fake")
 
-    with pytest.raises(ValidationError, match="GEMINI_API_KEY"):
-        _settings(app_env="production", embedding_provider="disabled", llm_provider="gemini")
-
-    with pytest.raises(ValidationError, match="RUNPOD_API_KEY"):
-        _settings(app_env="production", embedding_provider="disabled", llm_provider="runpod")
+    with pytest.raises(ValidationError, match="OPENROUTER_API_KEY"):
+        _settings(
+            app_env="production",
+            embedding_provider="disabled",
+            llm_provider="openrouter_vertex",
+        )
 
     production = _settings(
         app_env="production",
         embedding_provider="disabled",
-        llm_provider="gemini",
-        gemini_api_key=SecretStr("synthetic-test-key-never-log"),
+        llm_provider="openrouter_vertex",
+        openrouter_api_key=SecretStr("synthetic-test-key-never-log"),
     )
-    assert production.llm_provider == "gemini"
-
-    runpod_production = _settings(
-        app_env="production",
-        embedding_provider="disabled",
-        llm_provider="runpod",
-        runpod_api_key=SecretStr("synthetic-test-key-never-log"),
-    )
-    assert runpod_production.llm_provider == "runpod"
+    assert production.llm_provider == "openrouter_vertex"
+    assert "synthetic-test-key-never-log" not in repr(production)
 
 
 def test_client_request_id_is_not_a_global_unique_chat_write_key() -> None:
@@ -297,126 +288,6 @@ def test_client_request_id_is_not_a_global_unique_chat_write_key() -> None:
         for index in ChatRequestTrace.__table__.indexes
         if tuple(index.columns) == (request_id,)
     )
-
-
-class _FakeGeminiModels:
-    def __init__(self, captured: dict[str, Any]) -> None:
-        self.captured = captured
-
-    async def generate_content(self, **kwargs: Any) -> object:
-        self.captured["generate"] = kwargs
-        return SimpleNamespace(
-            parsed={
-                "status": "supported",
-                "claims": [
-                    {
-                        "text": "Orion revenue was 125 crore in FY2025.",
-                        "evidence_ids": ["ev_1"],
-                    }
-                ],
-                "limitations": [],
-            },
-            usage_metadata=SimpleNamespace(prompt_token_count=40, candidates_token_count=12),
-        )
-
-
-class _FakeGeminiAio:
-    def __init__(self, captured: dict[str, Any]) -> None:
-        self.models = _FakeGeminiModels(captured)
-        self.closed = False
-
-    async def aclose(self) -> None:
-        self.closed = True
-
-
-class _FakeGeminiClient:
-    def __init__(self, captured: dict[str, Any], **kwargs: Any) -> None:
-        captured["client"] = kwargs
-        self.aio = _FakeGeminiAio(captured)
-        captured["aio"] = self.aio
-
-
-@pytest.mark.asyncio
-async def test_gemini_request_disables_tool_capabilities_and_bounds_generation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, Any] = {}
-    monkeypatch.setattr(
-        "app.chat.gemini.genai.Client",
-        lambda **kwargs: _FakeGeminiClient(captured, **kwargs),
-    )
-    provider = GeminiLLMProvider(
-        api_key="synthetic-provider-key-never-log",
-        model_name="gemini-3.7-flash",
-        timeout_seconds=7,
-        max_output_tokens=512,
-    )
-
-    generation = await provider.generate(
-        GroundedGenerationRequest(question="What was Orion revenue?", evidence=(_evidence(),))
-    )
-
-    client_options = captured["client"]["http_options"]
-    assert client_options.timeout == 7000
-    assert client_options.retry_options.attempts == 1
-    request = captured["generate"]
-    assert request["model"] == "gemini-3.7-flash"
-    config = request["config"]
-    assert isinstance(config, types.GenerateContentConfig)
-    assert config.tools is None
-    assert config.tool_config is None
-    assert config.max_output_tokens == 512
-    assert config.candidate_count == 1
-    assert config.temperature == 0
-    assert config.thinking_config.thinking_level is types.ThinkingLevel.MEDIUM
-    assert config.thinking_config.include_thoughts is False
-    assert captured["aio"].closed is True
-    assert generation.usage.input_tokens == 40
-    assert generation.usage.output_tokens == 12
-
-
-@pytest.mark.asyncio
-async def test_gemini_retries_at_most_once_and_never_logs_sensitive_provider_data(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    provider = GeminiLLMProvider(
-        api_key="provider-key-must-not-appear",
-        model_name="gemini-3.7-flash",
-        timeout_seconds=7,
-        max_output_tokens=512,
-    )
-    calls = 0
-
-    async def transient_then_success(
-        request: GroundedGenerationRequest,
-    ) -> LLMGeneration:
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise LLMProviderError(LLMErrorCode.TRANSIENT, transient=True)
-        return LLMGeneration(
-            answer=GroundedAnswerDraft(
-                status="supported",
-                claims=(GroundedClaimDraft(text="Supported.", evidence_ids=("ev_1",)),),
-            ),
-            usage=LLMUsage(latency_ms=2),
-        )
-
-    monkeypatch.setattr(provider, "_generate_once", transient_then_success)
-    caplog.set_level(logging.DEBUG)
-    request = GroundedGenerationRequest(
-        question="sensitive raw query must not appear",
-        evidence=(_evidence(excerpt="sensitive raw document must not appear"),),
-    )
-
-    generation = await provider.generate(request)
-
-    assert calls == 2
-    assert generation.usage.retry_count == 1
-    rendered = caplog.text
-    assert "provider-key-must-not-appear" not in rendered
-    assert request.question not in rendered
-    assert request.evidence[0].excerpt not in rendered
 
 
 class _Session:

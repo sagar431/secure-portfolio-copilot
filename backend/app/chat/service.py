@@ -38,6 +38,7 @@ from app.schemas.chat import (
     GroundedCitationData,
     GroundedClaimData,
     GroundedMessageData,
+    safe_model_name,
 )
 from app.schemas.retrieval import AuthorizedSearchResultData
 
@@ -47,7 +48,9 @@ INSUFFICIENT_ANSWER = "I don't have sufficient authorized evidence to answer tha
 
 
 class GroundingValidationError(ValueError):
-    pass
+    def __init__(self, code: str) -> None:
+        super().__init__("Grounded answer validation failed safely.")
+        self.code = code
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +85,7 @@ def _evidence_from_result(result: AuthorizedSearchResultData, evidence_id: str) 
         or citation.cell_start != source.cell_start
         or citation.cell_end != source.cell_end
     ):
-        raise GroundingValidationError("Retrieved citation provenance is inconsistent.")
+        raise GroundingValidationError("PROVENANCE_INCONSISTENT")
     return GroundedEvidence(
         evidence_id=evidence_id,
         chunk_id=result.chunk_id,
@@ -104,19 +107,19 @@ def validate_grounded_answer(
     draft: GroundedAnswerDraft, evidence: tuple[GroundedEvidence, ...]
 ) -> _ValidatedAnswer:
     if draft.status != "supported" or not draft.claims:
-        raise GroundingValidationError("The provider did not return a supported answer.")
+        raise GroundingValidationError("PROVIDER_UNSUPPORTED")
     by_id = {item.evidence_id: item for item in evidence}
     if len(by_id) != len(evidence):
-        raise GroundingValidationError("Evidence IDs are not unique.")
+        raise GroundingValidationError("EVIDENCE_IDS_DUPLICATE")
     claims: list[GroundedClaimData] = []
     referenced: set[str] = set()
     for draft_claim in draft.claims:
         text = " ".join(draft_claim.text.split())
         citation_ids = tuple(dict.fromkeys(draft_claim.evidence_ids))
         if not text or len(text) > 500 or not citation_ids:
-            raise GroundingValidationError("Every claim must be bounded and cited.")
+            raise GroundingValidationError("CLAIM_INVALID")
         if any(item not in by_id for item in citation_ids):
-            raise GroundingValidationError("A claim references evidence that was not retrieved.")
+            raise GroundingValidationError("UNKNOWN_EVIDENCE")
         referenced.update(citation_ids)
         claims.append(GroundedClaimData(text=text, citation_ids=citation_ids))
     citations = tuple(
@@ -139,7 +142,7 @@ def validate_grounded_answer(
         if item.evidence_id in referenced
     )
     if {item.citation_id for item in citations} != referenced:
-        raise GroundingValidationError("Citation reconstruction was incomplete.")
+        raise GroundingValidationError("RECONSTRUCTION_INCOMPLETE")
     limitations = tuple(
         normalized for item in draft.limitations[:5] if (normalized := " ".join(item.split())[:300])
     )
@@ -149,9 +152,8 @@ def validate_grounded_answer(
 def _sufficient_results(
     results: tuple[AuthorizedSearchResultData, ...],
 ) -> tuple[AuthorizedSearchResultData, ...]:
-    relevant = tuple(
-        item for item in results if item.scores.keyword > 0 or item.scores.vector >= 0.25
-    )
+    lexical = tuple(item for item in results if item.scores.keyword > 0)
+    relevant = lexical or tuple(item for item in results if item.scores.vector >= 0.25)
     if not relevant:
         return ()
     return relevant
@@ -354,7 +356,7 @@ class GroundedChatService:
 
         try:
             validated = validate_grounded_answer(generation.answer, evidence)
-        except GroundingValidationError:
+        except GroundingValidationError as exc:
             return await self._persist_answer(
                 context=context,
                 conversation=conversation,
@@ -367,7 +369,7 @@ class GroundedChatService:
                 limitations=("The generated answer could not be validated against evidence.",),
                 evidence=evidence,
                 usage=generation.usage,
-                reason_code="CITATION_VALIDATION_FAILED",
+                reason_code=f"CITATION_{exc.code}",
             )
 
         answer = " ".join(
@@ -452,4 +454,7 @@ class GroundedChatService:
             claims=claims,
             citations=citations,
             limitations=limitations,
+            model_name=safe_model_name(usage.model_name or self.llm_provider.model_name),
+            route_reason=usage.route_reason,
+            fallback_used=usage.fallback_used,
         )

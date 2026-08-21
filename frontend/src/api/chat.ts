@@ -323,6 +323,9 @@ function isGroundedAnswerData(value: unknown): value is GroundedAnswerData {
       'claims',
       'citations',
       'limitations',
+      'model_name',
+      'route_reason',
+      'fallback_used',
     ]) ||
     !isUuid(value.conversation_id) ||
     !isUuid(value.user_message_id) ||
@@ -336,7 +339,10 @@ function isGroundedAnswerData(value: unknown): value is GroundedAnswerData {
     !Array.isArray(value.limitations) ||
     !value.limitations.every((limitation) =>
       isBoundedString(limitation, CHAT_LIMITATION_MAX_LENGTH),
-    )
+    ) ||
+    !isSafeModelName(value.model_name) ||
+    !isSafeRouteReason(value.route_reason) ||
+    typeof value.fallback_used !== 'boolean'
   ) {
     return false
   }
@@ -357,6 +363,28 @@ function isSafeCounter(value: unknown): value is number {
     Number.isInteger(value) &&
     value >= 0 &&
     value <= 1_000
+  )
+}
+
+const SAFE_MODEL_NAMES = new Set(['Gemini 3.1 Flash Lite', 'Gemini 3.7 Flash'])
+const SAFE_ROUTE_REASONS = new Set([
+  'SIMPLE_LOW_RISK',
+  'MULTI_DOCUMENT',
+  'LOW_CONFIDENCE',
+  'COMPLEX_REQUEST',
+  'AGENTIC_REQUEST',
+])
+
+function isSafeModelName(value: unknown) {
+  return (
+    value === null || (typeof value === 'string' && SAFE_MODEL_NAMES.has(value))
+  )
+}
+
+function isSafeRouteReason(value: unknown) {
+  return (
+    value === null ||
+    (typeof value === 'string' && SAFE_ROUTE_REASONS.has(value))
   )
 }
 
@@ -482,6 +510,8 @@ function isAgentRunData(value: unknown): value is AgentRunData {
       'replan_count',
       'retry_count',
       'trace',
+      'model_name',
+      'route_reason',
     ]) ||
     !isUuid(value.conversation_id) ||
     !isUuid(value.user_message_id) ||
@@ -507,6 +537,8 @@ function isAgentRunData(value: unknown): value is AgentRunData {
     !isSafeCounter(value.replan_count) ||
     !isSafeCounter(value.retry_count) ||
     !Array.isArray(value.trace) ||
+    !isSafeModelName(value.model_name) ||
+    !isSafeRouteReason(value.route_reason) ||
     value.trace.length === 0 ||
     value.trace.length > 256 ||
     !value.trace.every(isAgentTraceEvent)

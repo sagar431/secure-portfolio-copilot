@@ -35,6 +35,12 @@ export function AgentTraceTimeline({
       </header>
 
       <dl className="agent-trace__summary">
+        {run.model_name ? (
+          <div>
+            <dt>Model route</dt>
+            <dd>{run.model_name}</dd>
+          </div>
+        ) : null}
         <div>
           <dt>Session ID</dt>
           <dd>{run.agent_session_id}</dd>

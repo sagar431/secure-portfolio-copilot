@@ -10,13 +10,21 @@ from app.chat.contracts import (
     LLMUsage,
 )
 from app.chat.prompt import SYSTEM_INSTRUCTION, build_grounded_prompt
-from app.chat.structured_answer import ANSWER_SCHEMA, AnswerSchema
-from app.runpod_kimi import KimiErrorCode, KimiProviderError, RunpodKimiClient
+from app.chat.structured_answer import AnswerSchema
+from app.openrouter_vertex import (
+    OpenRouterErrorCode,
+    OpenRouterProviderError,
+    OpenRouterVertexClient,
+    json_contract_instruction,
+)
 
 
-class RunpodKimiLLMProvider:
-    def __init__(self, *, client: RunpodKimiClient) -> None:
+class OpenRouterVertexLLMProvider:
+    def __init__(self, *, client: OpenRouterVertexClient, max_attempts: int) -> None:
+        if max_attempts not in {1, 2}:
+            raise ValueError("Provider attempts must be one or two")
         self._client = client
+        self._max_attempts = max_attempts
 
     @property
     def model_name(self) -> str:
@@ -30,26 +38,40 @@ class RunpodKimiLLMProvider:
             try:
                 answer = AnswerSchema.model_validate_json(content, strict=True)
             except (TypeError, ValueError, ValidationError):
-                raise KimiProviderError(KimiErrorCode.INVALID_RESPONSE) from None
+                raise OpenRouterProviderError(OpenRouterErrorCode.INVALID_RESPONSE) from None
+            valid_ids = {item.evidence_id for item in request.evidence}
+            supported = answer.status == "supported"
+            if supported != bool(answer.claims):
+                raise OpenRouterProviderError(OpenRouterErrorCode.INVALID_RESPONSE)
+            if not supported and answer.claims:
+                raise OpenRouterProviderError(OpenRouterErrorCode.INVALID_RESPONSE)
+            if any(
+                not claim.evidence_ids
+                or len(set(claim.evidence_ids)) != len(claim.evidence_ids)
+                or not set(claim.evidence_ids).issubset(valid_ids)
+                for claim in answer.claims
+            ):
+                raise OpenRouterProviderError(OpenRouterErrorCode.INVALID_RESPONSE)
 
         try:
             completion = await self._client.complete(
-                system_instruction=SYSTEM_INSTRUCTION,
+                system_instruction=json_contract_instruction(
+                    SYSTEM_INSTRUCTION, AnswerSchema.model_json_schema(mode="validation")
+                ),
                 prompt=build_grounded_prompt(request),
-                schema_name="grounded_answer",
-                response_schema=ANSWER_SCHEMA,
                 content_validator=validate_content,
+                max_attempts=self._max_attempts,
             )
-        except KimiProviderError as exc:
-            if exc.code == KimiErrorCode.TIMEOUT:
+        except OpenRouterProviderError as exc:
+            if exc.code == OpenRouterErrorCode.TIMEOUT:
                 code = LLMErrorCode.TIMEOUT
-            elif exc.code == KimiErrorCode.TRANSIENT:
+            elif exc.code == OpenRouterErrorCode.TRANSIENT:
                 code = LLMErrorCode.TRANSIENT
-            elif exc.code == KimiErrorCode.REJECTED:
+            elif exc.code == OpenRouterErrorCode.REJECTED:
                 code = LLMErrorCode.REJECTED
             elif exc.code in {
-                KimiErrorCode.INVALID_RESPONSE,
-                KimiErrorCode.INCOMPLETE_RESPONSE,
+                OpenRouterErrorCode.INVALID_RESPONSE,
+                OpenRouterErrorCode.INCOMPLETE_RESPONSE,
             }:
                 code = LLMErrorCode.INVALID_RESPONSE
             else:
