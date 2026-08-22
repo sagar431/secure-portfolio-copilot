@@ -649,3 +649,40 @@ Use these exact synthetic browser probes:
 
 Do not use `What was Orion revenue in FY2025?` as the single-document probe: the seeded board pack
 and workbook both match, so Auto correctly resolves it to Deep.
+
+## Persistent agent-history verification
+
+Focused coverage validates the state graph (including the prepared AWAITING_APPROVAL state), table
+constraints, migration symmetry, immutable plan updates, step ordering/duplicate rejection,
+authorization-validated observations, successful/refused/insufficient/provider-error/limit
+termination, Fast no-run behavior, cursor pagination, forged filters, tenant/user isolation,
+generic 404 behavior, exact safe serialization, and content-free persistence.
+
+```bash
+cd backend
+uv run pytest -q tests/unit/agent_history tests/unit/agent_loop/test_agent_loop.py
+uv run pytest -q tests/integration/test_agent_history.py \
+  tests/integration/test_agent_runs.py
+
+cd ../frontend
+npm test -- --run src/api/agentHistory.test.ts \
+  src/pages/AgentHistoryPage.test.tsx src/AgentHistoryRouting.test.tsx
+```
+
+The required reversible migration gate is:
+
+```bash
+cd backend
+uv run alembic upgrade head
+uv run alembic check
+uv run alembic downgrade 20260821_0009
+uv run alembic upgrade head
+uv run alembic check
+```
+
+Browser acceptance signs in as a query-authorized synthetic user, opens **Agent History**, verifies
+the empty state or newest run, executes a bounded Deep run if needed, reloads history, expands the
+record, and confirms ordered Perception, Policy, Decision, Tool, Observation, and Final stages.
+Inspect only status/mode/model tier/duration/reason/tool/count metadata. Confirm no question, prompt,
+reasoning, raw argument, excerpt, document text, memory content, scope, credential, path, or stack
+trace appears in the page, API response, new tables, or logs.

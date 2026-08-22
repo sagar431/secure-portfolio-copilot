@@ -23,7 +23,9 @@ async def test_unknown_route_uses_safe_error_envelope(client: AsyncClient) -> No
 
 
 @pytest.mark.asyncio
-async def test_unhandled_exception_does_not_leak_details() -> None:
+async def test_unhandled_exception_does_not_leak_details_or_stack_trace(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     test_app: FastAPI = create_app()
 
     @test_app.get("/explode")
@@ -40,3 +42,7 @@ async def test_unhandled_exception_does_not_leak_details() -> None:
         "message": "Internal server error.",
     }
     assert "sensitive-database-detail" not in response.text
+    logged = capsys.readouterr().err
+    assert "unhandled_request_error" in logged
+    assert "sensitive-database-detail" not in logged
+    assert "Traceback" not in logged

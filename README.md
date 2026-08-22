@@ -465,8 +465,8 @@ the host MCP gateway. Logs/traces exclude questions, prompts, excerpts, answers,
 keys, and hidden reasoning; conversation `messages` intentionally persist the user's question and
 the controlled assistant answer.
 
-Broad semantic entailment, reranking, message-history loading, trace persistence,
-automated retention jobs, arbitrary code, remote/dynamic MCP, production embedding
+Broad semantic entailment, reranking, message-history loading, automated history retention jobs,
+arbitrary code, remote/dynamic MCP, production embedding
 infrastructure, and AWS remain absent.
 ## Secure 42-case evaluation
 
@@ -521,3 +521,24 @@ in both the board pack and workbook, so Auto correctly classifies it as multi-do
 The UI omits a dollar estimate when a stable Vertex list-price snapshot cannot be applied without
 ambiguity, such as a temporary catalog discount. It still shows available token/model metadata and
 never treats OpenRouter BYOK `usage.cost=0` as zero Vertex cost.
+
+## Persistent safe agent history
+
+Every bounded agent request that passes conversation ownership and `QUERY_DOCUMENTS` authorization
+receives a metadata-only `agent_runs` record. Fast requests that require Deep mode still stop before
+run creation. The lifecycle is host-owned: `CREATED` → `RUNNING` may finish as `COMPLETED`,
+`REFUSED`, `CLARIFICATION_REQUIRED`, `INSUFFICIENT_EVIDENCE`, `LIMIT_REACHED`, `FAILED`, or
+`CANCELLED`. `AWAITING_APPROVAL` exists only as a prepared persistence state; this milestone adds no
+approval buttons or resume behavior.
+
+Immutable `agent_plan_versions`, strictly ordered `agent_steps`, and authorization-validated
+`agent_observation_records` retain only bounded status metadata, approved tool names, safe reason
+codes, authorized document/chunk/citation IDs, counts, usage, durations, retries, and timestamps.
+They never contain the question, prompts, plan text, hidden reasoning, raw arguments, provider
+bodies, excerpts, document or memory content, scope objects, credentials, paths, or stack traces.
+
+Authorized users can open **Agent History** or call cursor-paginated `GET /api/agent-runs` and
+owner-scoped `GET /api/agent-runs/{run_id}`. The backend derives tenant and user filters from the
+current authenticated database context; foreign and unknown IDs return the same generic 404. The
+detail view reconstructs a safe Perception → Policy → Decision → Tool → Observation → Final
+timeline and renders all strings as inert React text.

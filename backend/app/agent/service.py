@@ -1,9 +1,15 @@
+import asyncio
 import logging
 import time
 from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.history_repository import (
+    create_run,
+    persist_outcome_history,
+    transition_run,
+)
 from app.agent.loop import AgentLoop
 from app.agent.models import (
     AgentRunOutcome,
@@ -19,6 +25,7 @@ from app.core.errors import APIError
 from app.mcp_gateway.contracts import APPROVED_TOOL_NAMES
 from app.mcp_gateway.gateway import ApprovedToolGateway
 from app.model_routing import ResponseMode, RoutingSignals, WorkloadKind, route_model
+from app.models.agent_runs import AgentRun, AgentRunStatus
 from app.models.identity import Capability
 from app.policies.models import AuthorizationContext
 from app.schemas.chat import AgentRunMessageData, AgentTraceEventData, safe_model_name
@@ -26,7 +33,6 @@ from app.schemas.chat import AgentRunMessageData, AgentTraceEventData, safe_mode
 logger = logging.getLogger("app.agent.audit")
 
 _REFUSED = "I can't perform that request within your authorized scope."
-_FAILED = "The agent could not complete the request safely."
 
 
 class AgentRunService:
@@ -47,11 +53,31 @@ class AgentRunService:
         self._route_reason_code = route_reason_code
         self._low_confidence_threshold = low_confidence_threshold
 
+    async def _mark_run_terminal(
+        self,
+        run_id: UUID,
+        *,
+        status: AgentRunStatus,
+        duration_ms: int,
+        reason_code: str,
+    ) -> None:
+        await self._session.rollback()
+        persisted_run = await self._session.get(AgentRun, run_id)
+        if persisted_run is None:
+            return
+        if AgentRunStatus(persisted_run.status) not in {
+            AgentRunStatus.CREATED,
+            AgentRunStatus.RUNNING,
+        }:
+            return
+        persisted_run.duration_ms = min(120_000, max(0, duration_ms))
+        transition_run(persisted_run, status, reason_code=reason_code)
+        await self._session.commit()
+
     @staticmethod
-    def _scope_denied_outcome() -> AgentRunOutcome:
-        session_id = uuid4()
+    def _scope_denied_outcome(run_id: UUID) -> AgentRunOutcome:
         return AgentRunOutcome(
-            agent_session_id=session_id,
+            agent_session_id=run_id,
             terminal_status=TerminalStatus.REFUSED,
             stopping_reason=StoppingReason.SCOPE_DENIED,
             answer=_REFUSED,
@@ -70,26 +96,6 @@ class AgentRunService:
                     status=TraceStatus.TERMINATED,
                     duration_ms=0,
                     reason_code="SCOPE_DENIED",
-                ),
-            ),
-        )
-
-    @staticmethod
-    def _failed_outcome() -> AgentRunOutcome:
-        return AgentRunOutcome(
-            agent_session_id=uuid4(),
-            terminal_status=TerminalStatus.FAILED,
-            stopping_reason=StoppingReason.TOOL_ERROR,
-            answer=_FAILED,
-            step_count=0,
-            replan_count=0,
-            retry_count=0,
-            trace=(
-                TraceEvent(
-                    event_type=TraceEventType.TERMINAL,
-                    status=TraceStatus.TERMINATED,
-                    duration_ms=0,
-                    reason_code="AGENT_FAILED_SAFE",
                 ),
             ),
         )
@@ -118,19 +124,11 @@ class AgentRunService:
         ):
             raise APIError(403, "forbidden", "Agent document access is not permitted.")
 
+        run_id = uuid4()
         route_reason_code = "NO_MODEL_CALL"
         resolved_response_mode: ResponseMode | None = None
-        if not request_matches_authorized_scope(context, question):
-            user_message = await add_message(
-                self._session,
-                conversation=conversation,
-                user_id=context.identity.user_id,
-                role="user",
-                content=question,
-                request_id=request_id,
-            )
-            outcome = self._scope_denied_outcome()
-        else:
+        request_scope_allowed = request_matches_authorized_scope(context, question)
+        if request_scope_allowed:
             routing_decision = route_model(
                 RoutingSignals(WorkloadKind.AGENTIC, question, 0, None),
                 low_confidence_threshold=self._low_confidence_threshold,
@@ -144,35 +142,91 @@ class AgentRunService:
                 )
             route_reason_code = routing_decision.reason.value
             resolved_response_mode = routing_decision.resolved_response_mode
-            user_message = await add_message(
-                self._session,
-                conversation=conversation,
-                user_id=context.identity.user_id,
-                role="user",
-                content=question,
-                request_id=request_id,
+
+        run_record = await create_run(
+            self._session,
+            run_id=run_id,
+            conversation_id=conversation.id,
+            tenant_id=tenant_id,
+            user_id=context.identity.user_id,
+            response_mode=response_mode.value,
+            selected_model_tier=(
+                resolved_response_mode.value if resolved_response_mode is not None else None
+            ),
+            selected_model_name=(
+                safe_model_name(self._model_name) if resolved_response_mode is not None else None
+            ),
+            policy_decision="ALLOWED" if request_scope_allowed else "DENIED",
+            policy_reason_code=(
+                "REQUEST_SCOPE_AUTHORIZED"
+                if request_scope_allowed
+                else "REQUEST_SCOPE_NOT_AUTHORIZED"
+            ),
+        )
+        if request_scope_allowed:
+            transition_run(
+                run_record, AgentRunStatus.RUNNING, reason_code="AGENT_EXECUTION_STARTED"
             )
-            permitted_tool_catalog = self._gateway.permitted_catalog(
-                context.scope, APPROVED_TOOL_NAMES
-            )
-            try:
+        await self._session.commit()
+
+        try:
+            if not request_scope_allowed:
+                user_message = await add_message(
+                    self._session,
+                    conversation=conversation,
+                    user_id=context.identity.user_id,
+                    role="user",
+                    content=question,
+                    request_id=request_id,
+                )
+                outcome = self._scope_denied_outcome(run_id)
+            else:
+                user_message = await add_message(
+                    self._session,
+                    conversation=conversation,
+                    user_id=context.identity.user_id,
+                    role="user",
+                    content=question,
+                    request_id=request_id,
+                )
+                permitted_tool_catalog = self._gateway.permitted_catalog(
+                    context.scope, APPROVED_TOOL_NAMES
+                )
                 outcome = await self._loop.run(
                     query=question,
                     authorization_context=context,
                     permitted_tool_catalog=permitted_tool_catalog,
                     request_id=request_id,
+                    agent_run_id=run_id,
                 )
-            except Exception:
-                outcome = self._failed_outcome()
-
-        assistant_message = await add_message(
-            self._session,
-            conversation=conversation,
-            user_id=context.identity.user_id,
-            role="assistant",
-            content=outcome.answer,
-            request_id=request_id,
-        )
+            assistant_message = await add_message(
+                self._session,
+                conversation=conversation,
+                user_id=context.identity.user_id,
+                role="assistant",
+                content=outcome.answer,
+                request_id=request_id,
+            )
+        except asyncio.CancelledError:
+            await self._mark_run_terminal(
+                run_id,
+                status=AgentRunStatus.CANCELLED,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                reason_code="REQUEST_CANCELLED",
+            )
+            raise
+        except Exception:
+            await self._mark_run_terminal(
+                run_id,
+                status=AgentRunStatus.FAILED,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                reason_code="AGENT_EXECUTION_FAILED_SAFE",
+            )
+            raise APIError(
+                500,
+                "agent_run_failed",
+                "The agent could not complete the request safely.",
+            ) from None
         trace_status = (
             "grounded"
             if outcome.terminal_status == TerminalStatus.COMPLETED
@@ -192,13 +246,63 @@ class AgentRunService:
             reason_code=outcome.stopping_reason.value.upper(),
             document_ids=tuple(dict.fromkeys(item.document_id for item in outcome.citations)),
             chunk_ids=tuple(item.chunk_id for item in outcome.citations),
-            input_tokens=None,
-            output_tokens=None,
+            input_tokens=outcome.input_tokens,
+            output_tokens=outcome.output_tokens,
             latency_ms=max(0, int((time.monotonic() - started) * 1000)),
             retry_count=outcome.retry_count,
             route_reason_code=route_reason_code,
         )
-        await self._session.commit()
+        duration_ms = min(120_000, max(0, int((time.monotonic() - started) * 1000)))
+        run_record.duration_ms = duration_ms
+        run_record.final_assistant_message_id = assistant_message.id
+        run_record.perception_status, run_record.perception_reason_code = (
+            ("COMPLETED", "PERCEPTION_COMPLETED")
+            if any(item.event_type == TraceEventType.PERCEPTION for item in outcome.trace)
+            else ("FAILED", "PERCEPTION_MODEL_FAILED")
+            if outcome.stopping_reason == StoppingReason.MODEL_ERROR and request_scope_allowed
+            else ("NOT_STARTED", "PERCEPTION_NOT_STARTED")
+        )
+        terminal_status = {
+            TerminalStatus.COMPLETED: AgentRunStatus.COMPLETED,
+            TerminalStatus.REFUSED: AgentRunStatus.REFUSED,
+            TerminalStatus.NEEDS_CLARIFICATION: AgentRunStatus.CLARIFICATION_REQUIRED,
+            TerminalStatus.INSUFFICIENT_EVIDENCE: AgentRunStatus.INSUFFICIENT_EVIDENCE,
+            TerminalStatus.LIMIT_REACHED: AgentRunStatus.LIMIT_REACHED,
+            TerminalStatus.FAILED: AgentRunStatus.FAILED,
+        }[outcome.terminal_status]
+        try:
+            await persist_outcome_history(
+                self._session,
+                run=run_record,
+                scope=context.scope,
+                outcome=outcome,
+            )
+            transition_run(
+                run_record,
+                terminal_status,
+                reason_code=outcome.stopping_reason.value.upper(),
+            )
+            await self._session.commit()
+        except asyncio.CancelledError:
+            await self._mark_run_terminal(
+                run_id,
+                status=AgentRunStatus.CANCELLED,
+                duration_ms=duration_ms,
+                reason_code="REQUEST_CANCELLED",
+            )
+            raise
+        except Exception:
+            await self._mark_run_terminal(
+                run_id,
+                status=AgentRunStatus.FAILED,
+                duration_ms=duration_ms,
+                reason_code="PERSISTENCE_VALIDATION_FAILED",
+            )
+            raise APIError(
+                500,
+                "agent_history_failed",
+                "The agent run could not be recorded safely.",
+            ) from None
         logger.info(
             "agent_run_event",
             extra={

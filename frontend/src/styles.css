@@ -1461,6 +1461,69 @@ td {
   border: 0;
 }
 
+.agent-history-page {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.agent-history-list {
+  display: grid;
+  gap: 1rem;
+}
+
+.agent-history-card {
+  display: grid;
+  gap: 1rem;
+  padding: 1.1rem;
+  border: 1px solid var(--border-color, #cbd5e1);
+  border-radius: 0.9rem;
+  background: #fff;
+}
+
+.agent-history-card > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: start;
+}
+
+.agent-history-card h2 {
+  margin: 0.35rem 0 0;
+}
+
+.agent-history-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin: 0;
+}
+
+.agent-history-summary div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.agent-history-summary dt {
+  color: var(--muted-color, #64748b);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.agent-history-summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.stored-agent-trace {
+  margin-top: 0.5rem;
+}
+
+@media (max-width: 800px) {
+  .agent-history-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .response-mode-control legend {
   margin-bottom: 0.55rem;
   font-weight: 700;

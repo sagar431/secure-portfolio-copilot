@@ -1,5 +1,6 @@
 """SQLAlchemy domain models registered with Alembic metadata."""
 
+from app.models.agent_runs import AgentObservationRecord, AgentPlanVersion, AgentRun, AgentStep
 from app.models.chat import ChatRequestTrace, Conversation, Message
 from app.models.documents import (
     Document,
@@ -27,6 +28,10 @@ from app.models.identity import (
 from app.models.memory import Memory, MemorySource
 
 __all__ = [
+    "AgentObservationRecord",
+    "AgentPlanVersion",
+    "AgentRun",
+    "AgentStep",
     "Company",
     "CompanyGrant",
     "ChatRequestTrace",

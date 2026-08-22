@@ -33,6 +33,9 @@ export function ApplicationLayout() {
           ) : null}
           {canQueryDocuments ? <Link to="/chat">Grounded chat</Link> : null}
           {canQueryDocuments ? (
+            <Link to="/agent-history">Agent History</Link>
+          ) : null}
+          {canQueryDocuments ? (
             <Link to="/memories">Memory inspector</Link>
           ) : null}
           {import.meta.env.DEV && canQueryDocuments ? (

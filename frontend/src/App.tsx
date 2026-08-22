@@ -4,6 +4,7 @@ import { ProtectedRoute } from './auth/ProtectedRoute'
 import { CapabilityRoute } from './auth/CapabilityRoute'
 import { ApplicationLayout } from './components/ApplicationLayout'
 import { AuthorizedSearchPage } from './pages/AuthorizedSearchPage'
+import { AgentHistoryPage } from './pages/AgentHistoryPage'
 import { ChatPage } from './pages/ChatPage'
 import { DocumentIngestionPage } from './pages/DocumentIngestionPage'
 import { EvaluationDashboardPage } from './pages/EvaluationDashboardPage'
@@ -21,6 +22,7 @@ export function App() {
           <Route index element={<HomePage />} />
           <Route element={<CapabilityRoute capability="QUERY_DOCUMENTS" />}>
             <Route path="chat" element={<ChatPage />} />
+            <Route path="agent-history" element={<AgentHistoryPage />} />
             <Route path="memories" element={<MemoryPage />} />
           </Route>
           <Route element={<CapabilityRoute capability="MANAGE_UPLOADS" />}>

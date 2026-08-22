@@ -51,7 +51,7 @@ async def validation_error_handler(request: Request, exc: Exception) -> JSONResp
 
 
 async def unexpected_error_handler(request: Request, exc: Exception) -> JSONResponse:
-    logger.exception(
+    logger.error(
         "unhandled_request_error",
         extra={"request_id": _request_id(request), "error_type": type(exc).__name__},
     )

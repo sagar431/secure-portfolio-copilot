@@ -315,6 +315,40 @@ class StructuredObservation(StrictModel):
         return tuple(item.evidence_id for item in self.evidence)
 
 
+class SafeStepSnapshot(StrictModel):
+    """Content-free step metadata approved for persistence."""
+
+    plan_version: int = Field(ge=1, le=2)
+    plan_step_index: int = Field(ge=0, le=2)
+    action_name: Literal["TOOL_CALL"] = "TOOL_CALL"
+    tool_name: str = Field(pattern=r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
+    status: Literal["COMPLETED", "DENIED", "TIMEOUT", "FAILED"]
+    policy_decision: Literal["ALLOWED", "DENIED"]
+    reason_code: str = Field(pattern=r"^[A-Z][A-Z0-9_]{1,95}$")
+    duration_ms: int = Field(ge=0, le=120_000)
+
+
+class SafeObservationSnapshot(StrictModel):
+    """Authorized identifiers and bounded counts only; evidence content is excluded."""
+
+    status: Literal["SUCCESS", "DENIED", "TIMEOUT", "ERROR"]
+    reason_code: str = Field(pattern=r"^[A-Z][A-Z0-9_]{1,95}$")
+    document_ids: tuple[UUID, ...] = Field(default=(), max_length=8)
+    chunk_ids: tuple[UUID, ...] = Field(default=(), max_length=8)
+    citation_ids: tuple[Annotated[str, Field(pattern=r"^ev_[1-9][0-9]*$")], ...] = Field(
+        default=(), max_length=8
+    )
+    retry_count: int = Field(default=0, ge=0, le=1)
+    duration_ms: int = Field(ge=0, le=120_000)
+
+    @model_validator(mode="after")
+    def identifiers_describe_the_same_evidence(self) -> SafeObservationSnapshot:
+        lengths = {len(self.document_ids), len(self.chunk_ids), len(self.citation_ids)}
+        if len(lengths) != 1:
+            raise ValueError("Safe observation identifier counts must match")
+        return self
+
+
 class AgentSession(StrictModel):
     session_id: UUID = Field(default_factory=uuid4)
     request_id: str = Field(min_length=1, max_length=128, exclude=True)
@@ -325,6 +359,8 @@ class AgentSession(StrictModel):
     plans: tuple[Plan, ...] = ()
     completed_steps: tuple[CompletedStep, ...] = ()
     observations: tuple[StructuredObservation, ...] = Field(default=(), exclude=True)
+    safe_steps: tuple[SafeStepSnapshot, ...] = Field(default=(), exclude=True)
+    safe_observations: tuple[SafeObservationSnapshot, ...] = Field(default=(), exclude=True)
     terminal_status: TerminalStatus | None = None
     stopping_reason: StoppingReason | None = None
     step_count: int = Field(default=0, ge=0)
@@ -346,6 +382,11 @@ class AgentRunOutcome(StrictModel):
     replan_count: int = Field(ge=0)
     retry_count: int = Field(ge=0)
     trace: tuple[TraceEvent, ...]
+    plan_versions: tuple[Plan, ...] = Field(default=(), exclude=True)
+    safe_steps: tuple[SafeStepSnapshot, ...] = Field(default=(), exclude=True)
+    safe_observations: tuple[SafeObservationSnapshot, ...] = Field(default=(), exclude=True)
+    input_tokens: int | None = Field(default=None, ge=0, le=1_000_000, exclude=True)
+    output_tokens: int | None = Field(default=None, ge=0, le=1_000_000, exclude=True)
 
 
 BoundedSeconds = Annotated[float, Field(gt=0, le=300)]

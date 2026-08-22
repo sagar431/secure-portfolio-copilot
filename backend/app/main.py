@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes.agent_history import router as agent_history_router
 from app.api.routes.agent_runs import router as agent_runs_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.conversations import router as conversations_router
@@ -52,6 +53,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(documents_router)
     application.include_router(conversations_router)
     application.include_router(agent_runs_router)
+    application.include_router(agent_history_router)
     application.include_router(memories_router)
     application.include_router(evaluations_router)
     if active_settings.app_env in {"development", "test"}:

@@ -2,6 +2,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from typing import TypeVar
+from uuid import UUID, uuid4
 
 from app.agent.contracts import (
     AgentModelError,
@@ -18,6 +19,8 @@ from app.agent.models import (
     ObservationStatus,
     PerceptionSnapshot,
     RemainingBudgets,
+    SafeObservationSnapshot,
+    SafeStepSnapshot,
     StoppingReason,
     StructuredObservation,
     TerminalStatus,
@@ -110,9 +113,11 @@ class AgentLoop:
         authorization_context: AuthorizationContext,
         permitted_tool_catalog: tuple[PermittedToolDescriptor, ...],
         request_id: str,
+        agent_run_id: UUID | None = None,
     ) -> AgentRunOutcome:
         started = self._clock()
         session = AgentSession(
+            session_id=agent_run_id or uuid4(),
             request_id=request_id,
             original_query=query,
             authorization_context=authorization_context,
@@ -234,7 +239,7 @@ class AgentLoop:
                 )
             )
             try:
-                plan_state.validate_next_action(action)
+                active_plan_step = plan_state.validate_next_action(action)
             except PlanExhaustedError:
                 return self._terminal(
                     session,
@@ -333,6 +338,8 @@ class AgentLoop:
                     answer=_REFUSED,
                 )
 
+            assert action.action_name is not None
+            tool_name = action.action_name
             tool_started = self._clock()
             try:
                 observation = await self._within_budget(
@@ -345,6 +352,23 @@ class AgentLoop:
                     started=started,
                 )
             except TimeoutError:
+                tool_duration_ms = max(0, int((self._clock() - tool_started) * 1000))
+                session = session.model_copy(
+                    update={
+                        "safe_steps": session.safe_steps
+                        + (
+                            SafeStepSnapshot(
+                                plan_version=plan_state.current_plan.version,
+                                plan_step_index=active_plan_step.step_index,
+                                tool_name=tool_name,
+                                status="TIMEOUT",
+                                policy_decision="ALLOWED",
+                                reason_code="TOOL_TIMEOUT",
+                                duration_ms=tool_duration_ms,
+                            ),
+                        )
+                    }
+                )
                 trace.append(
                     self._event(
                         TraceEventType.TOOL,
@@ -363,6 +387,23 @@ class AgentLoop:
                     retry_count,
                 )
             except Exception:
+                tool_duration_ms = max(0, int((self._clock() - tool_started) * 1000))
+                session = session.model_copy(
+                    update={
+                        "safe_steps": session.safe_steps
+                        + (
+                            SafeStepSnapshot(
+                                plan_version=plan_state.current_plan.version,
+                                plan_step_index=active_plan_step.step_index,
+                                tool_name=tool_name,
+                                status="FAILED",
+                                policy_decision="ALLOWED",
+                                reason_code="TOOL_ERROR",
+                                duration_ms=tool_duration_ms,
+                            ),
+                        )
+                    }
+                )
                 trace.append(
                     self._event(
                         TraceEventType.TOOL,
@@ -386,11 +427,44 @@ class AgentLoop:
                 retrieval_count += 1
             retry_count += observation.retry_count
             observations.append(observation)
+            tool_duration_ms = max(0, int((self._clock() - tool_started) * 1000))
+            safe_step = SafeStepSnapshot(
+                plan_version=plan_state.current_plan.version,
+                plan_step_index=active_plan_step.step_index,
+                tool_name=tool_name,
+                status=(
+                    "COMPLETED"
+                    if observation.status == ObservationStatus.SUCCESS
+                    else "DENIED"
+                    if observation.status == ObservationStatus.DENIED
+                    else "TIMEOUT"
+                    if observation.status == ObservationStatus.TIMEOUT
+                    else "FAILED"
+                ),
+                policy_decision=(
+                    "DENIED" if observation.status == ObservationStatus.DENIED else "ALLOWED"
+                ),
+                reason_code=observation.reason_code,
+                duration_ms=tool_duration_ms,
+            )
+            safe_observation = SafeObservationSnapshot.model_validate(
+                {
+                    "status": observation.status.value.upper(),
+                    "reason_code": observation.reason_code,
+                    "document_ids": tuple(item.document_id for item in observation.evidence),
+                    "chunk_ids": tuple(item.chunk_id for item in observation.evidence),
+                    "citation_ids": tuple(item.evidence_id for item in observation.evidence),
+                    "retry_count": observation.retry_count,
+                    "duration_ms": observation.duration_ms,
+                }
+            )
             session = session.model_copy(
                 update={
                     "step_count": step_count,
                     "retry_count": retry_count,
                     "observations": tuple(observations),
+                    "safe_steps": session.safe_steps + (safe_step,),
+                    "safe_observations": session.safe_observations + (safe_observation,),
                 }
             )
             trace.extend(
@@ -412,7 +486,7 @@ class AgentLoop:
                         else TraceStatus.FAILED,
                         observation.reason_code,
                         action_name=action.action_name,
-                        duration_ms=int((self._clock() - tool_started) * 1000),
+                        duration_ms=tool_duration_ms,
                         evidence_ids=observation.evidence_reference_ids,
                     ),
                     self._event(
@@ -775,6 +849,8 @@ class AgentLoop:
             claims=validated.claims,
             citations=validated.citations,
             limitations=validated.limitations,
+            input_tokens=generation.usage.input_tokens,
+            output_tokens=generation.usage.output_tokens,
         )
 
     def _terminal(
@@ -792,6 +868,8 @@ class AgentLoop:
         citations: tuple[GroundedCitationData, ...] = (),
         limitations: tuple[str, ...] = (),
         calculations: tuple[CalculationData, ...] = (),
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
     ) -> AgentRunOutcome:
         if status != TerminalStatus.COMPLETED and (claims or citations or calculations):
             raise ValueError("Only completed outcomes may carry claims, citations, or calculations")
@@ -824,4 +902,9 @@ class AgentLoop:
             replan_count=replan_count,
             retry_count=retry_count,
             trace=tuple(trace),
+            plan_versions=session.plans,
+            safe_steps=session.safe_steps,
+            safe_observations=session.safe_observations,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
         )

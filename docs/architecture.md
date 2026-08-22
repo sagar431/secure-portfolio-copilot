@@ -6,7 +6,8 @@ This document describes the Step 1 foundation, Step 2 identity/authorization, St
 synthetic-document ingestion, Step 4 secure chunk storage, Step 5 approved-version embeddings and
 authorization-first hybrid retrieval, Step 6 non-agentic grounded chat, Step 7's embedded approved
 MCP gateway, Step 8's Perception, Decision, and bounded AgentLoop, the deterministic Gemini 3.1 Flash Lite/Gemini 3.7 Flash
-router, source-inheriting scoped memory, and Step 9's deterministic fixed calculators. Arbitrary
+router, source-inheriting scoped memory, Step 9's deterministic fixed calculators, and persistent
+safe agent-run history. Arbitrary
 execution, remote/dynamic MCP, multi-agent coordination, and deployment remain outside this scope.
 
 ```mermaid
@@ -63,6 +64,12 @@ flowchart LR
     Calculators --> Observation
     Observation --> Perception
     Decision -->|FINALIZE| CitationValidator
+    AgentAPI --> RunCheckpoint[(Safe agent run checkpoint)]
+    Observation --> HistoryWriter[Metadata-only history writer]
+    HistoryWriter --> RunHistory[(Plans + ordered steps + safe observations)]
+    Browser -->|owner-scoped cursor reads| HistoryAPI[Agent history API]
+    HistoryAPI --> RunCheckpoint
+    HistoryAPI --> RunHistory
     Identity --> SQLAlchemy[SQLAlchemy async engine]
     RequestID --> Route[Typed health/readiness route]
     Route -->|/ready only| SQLAlchemy
@@ -72,6 +79,31 @@ flowchart LR
     Envelope --> Browser
     Alembic[Alembic] -->|schema migrations| PostgreSQL
 ```
+
+## Persistent agent-run history
+
+After the server proves conversation ownership and `QUERY_DOCUMENTS`, response-mode policy runs.
+A Fast request requiring Deep exits before persistence. Every remaining agent request receives one
+UUID and a safe CREATED checkpoint; authorized execution transitions it to RUNNING before any model
+or tool call. Scope preflight refusal may transition directly from CREATED to REFUSED.
+
+The terminal transaction writes immutable plan-version metadata, globally ordered non-replayable
+steps, and safe observations. Observation document/chunk pairs are reauthorized against the current
+materialized chunk statement before insertion. Messages, the existing request trace, history rows,
+and terminal status commit together. Any validation/database failure rolls this transaction back;
+the prior checkpoint is then marked FAILED with a content-free reason. Request cancellation maps to
+CANCELLED. `AWAITING_APPROVAL` is represented in the state graph for a later milestone but no
+approval or resume endpoint exists.
+
+History list/detail routes derive tenant and user from the authenticated database context. The list
+uses descending `(created_at, id)` keyset pagination with an opaque cursor. Detail loading eagerly
+fetches plan/step/observation relationships only after exact owner filtering. Both foreign and
+unknown IDs return `Agent run was not found.`
+
+The browser validates an exact metadata contract and renders the stored Perception → Policy →
+Decision → Tool → Observation → Final vocabulary with the existing sanitized timeline styles.
+Document/chunk IDs are available only as already-authorized metadata; the page shows concise counts
+and reason codes, not text or authorization internals.
 
 ## Authentication and authorization path
 

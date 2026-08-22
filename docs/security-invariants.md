@@ -219,9 +219,9 @@ These rules apply now and must remain true as later milestones are approved.
     stages/statuses, five approved tool names, `ev_N` evidence IDs, bounded durations/counters, and
     explicit reason/stopping allowlists. Model reason codes, query, prompts, plan, arguments, scope,
     evidence text, answers, paths, errors, secrets, and reasoning are excluded.
-81. **No new persistence surface.** The detailed Step 8 timeline is response-only. Existing messages
-    intentionally store conversation text; metadata traces store only safe IDs/status/counts. There
-    is no global/unscoped memory.
+81. **Safe trace persistence only.** Live traces remain content-free. Persistent agent history stores
+    bounded lifecycle, plan-version, step, policy, tool, observation, identifier, count, usage, and
+    timing metadata only; conversation text remains confined to existing message rows.
 82. **Perception never becomes authority.** Typed entities and mentioned tenant/company/department
     hints are untrusted language observations. They never become scope, grants, policy input, tool
     arguments, or database filters. Step-result prompts exclude identity, grants, scope, secrets,
@@ -334,3 +334,28 @@ Release gates are immutable in code: cross-tenant denial, cross-department denia
   the evidence set.
 - Logs, traces, and responses contain safe enum/usage metadata only—never prompts, provider bodies,
   authorization details, unrestricted evidence, keys, or hidden reasoning.
+
+## Persistent agent-run invariants
+
+105. **Authorization precedes run creation.** Conversation ownership and current
+     `QUERY_DOCUMENTS` capability must succeed first. Fast upgrade rejection creates no run.
+106. **State transitions are host-owned.** Only the explicit CREATED/RUNNING/AWAITING_APPROVAL and
+     terminal transition graph is accepted. Terminal states cannot reopen; approval behavior is not
+     implemented.
+107. **Persistence is content-free by schema.** Agent history has no question, answer, prompt,
+     reasoning, plan text, raw argument/result, excerpt, memory, scope, credential, path, or stack
+     trace columns.
+108. **Plan versions are immutable.** Versions start at one, increment contiguously, contain only a
+     safe change reason and bounded step count, and cannot be updated in ORM or PostgreSQL.
+109. **Steps are ordered and non-replayable.** Global step numbers and plan positions are unique;
+     only the five approved tools and allow-listed statuses/policy results can be stored.
+110. **Observations require current authorization.** Every stored document/chunk pair is rechecked
+     through the materialized authorization-first chunk query. Failure rolls back the whole history
+     transaction and marks the safe run checkpoint FAILED.
+111. **History reads are owner-scoped.** Tenant and user predicates come only from the authenticated
+     database context. Cursor contents cannot broaden access, and foreign/unknown run IDs share one
+     generic 404.
+112. **Historical UI is inert.** Strict client validators reject extra or malformed fields and React
+     renders returned strings as text, never HTML. The UI performs no authorization filtering.
+113. **Failure logs are metadata-only.** Unexpected errors log request ID and exception type without
+     stack traces, messages, arguments, prompts, evidence, or credentials.

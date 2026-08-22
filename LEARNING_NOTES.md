@@ -841,3 +841,26 @@ Separately, the live Decision stage named the user-facing workspace (`orion`) wh
 calculator stores a canonical company slug (`orion-main`). The safe usability fix is not to trust or
 prompt-inject scope: host code resolves that alias only inside eligible Finance grants and only when
 it identifies exactly one authorized company. Ambiguity and cross-workspace aliases remain denials.
+
+## Persistent agent history design lessons
+
+A useful historical trace is not a transcript. The database needs enough structure to explain
+which safe stage happened, which approved tool was considered, which policy result applied, and how
+the run terminated, but it does not need the user question, plan prose, prompt, reasoning, raw
+arguments, result text, or scope object. Treating those exclusions as schema design—not redaction
+after storage—makes the boundary reviewable.
+
+Run persistence has two transaction horizons. A small metadata-only CREATED/RUNNING checkpoint must
+exist before an external model or tool call so a failure does not erase the run. Plans, steps,
+observations, messages, and terminal metadata are then written atomically. If validation or commit
+fails, rollback removes the partial history and a separate safe update marks the checkpoint FAILED.
+
+Ordering belongs to host and database constraints. Plan versions are contiguous and update-
+immutable; step numbers are unique and sequential; `(run, plan version, plan step index)` cannot
+replay. Model plan text is deliberately omitted. Observation IDs are persisted only after a fresh
+authorization-first chunk query proves each document/chunk pair is still allowed.
+
+Cursor pagination and generic 404 behavior are authorization features as well as API ergonomics.
+The client never supplies tenant/user filters, and both list and detail derive ownership from the
+current database-loaded identity. Rendering stored summaries through ordinary React text nodes
+keeps even hostile-looking strings inert.

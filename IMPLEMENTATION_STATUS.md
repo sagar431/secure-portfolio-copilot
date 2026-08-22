@@ -218,8 +218,9 @@ explicit `NO_MODEL_CALL` sentinel instead of a configured-but-unused model name.
   context. It does not yet provide model-proposed memory candidates, MCP memory tools, automatic
   transcript memory, or a correction workflow.
 
-- The agent trace is response-only; Steps 7 and 8 do not add AgentRun/Plan/Step/Observation persistence or
-  a trace-history endpoint. Existing message content and metadata-only request traces still persist.
+- Agent history is metadata-only and owner-scoped. It does not yet include retention/deletion/export,
+  human approval actions, pause/resume execution, or recovery of a process interrupted outside a
+  handled request cancellation. `AWAITING_APPROVAL` is a prepared state only.
 - The conversation list is persisted, and message rows are stored, but Step 6 has no message-history
   read endpoint and sends no prior turns to the model. Scoped memory is explicit and separate; it
   does not restore earlier transcript turns after reload.
@@ -285,3 +286,27 @@ The implementation and verification artifacts remain local and uncommitted on `c
 
 No migration is required because this is request/response and existing trace metadata, not a
 persisted browser preference. Changes remain local and uncommitted on `codex/response-modes`.
+
+## Persistent agent runs — implemented locally
+
+- Alembic revision `20260822_0010` adds `agent_runs`, immutable `agent_plan_versions`, ordered
+  `agent_steps`, and authorization-validated `agent_observation_records` with bounded constraints.
+- The host state machine supports CREATED, RUNNING, AWAITING_APPROVAL, COMPLETED, REFUSED,
+  CLARIFICATION_REQUIRED, INSUFFICIENT_EVIDENCE, LIMIT_REACHED, FAILED, and CANCELLED. Terminal
+  states cannot transition; AWAITING_APPROVAL has persistence semantics only.
+- Run creation follows owned-conversation and capability checks and follows Fast-mode preflight.
+  Safe initial state is committed before model/tool execution; failures and cancellation update a
+  terminal record without persisting partial plan/step/observation rows.
+- Plan rows exclude model plan text and are update-immutable in ORM and PostgreSQL. Step replay and
+  duplicate positions are rejected. Observation identifiers are rechecked through the current
+  authorization-first chunk statement before insertion.
+- `GET /api/agent-runs` uses an opaque keyset cursor; `GET /api/agent-runs/{run_id}` applies exact
+  server-derived tenant/user ownership. Foreign and missing IDs share the same response.
+- The capability-gated Agent History page includes paginated list, safe expansion, loading, empty,
+  error, and inaccessible states using the same sanitized timeline vocabulary as live runs.
+- Final verification passes 398 PostgreSQL-backed backend tests, all 42 evaluation cases and release
+  gates, 116 frontend tests, Ruff/strict mypy/Prettier/ESLint/TypeScript, the production build,
+  zero-vulnerability `npm audit`, the complete reversible Alembic cycle, static secret scans, and
+  authenticated browser persistence/reload acceptance.
+
+Implementation remains local, uncommitted, and unpushed on `codex/persistent-agent-runs`.
