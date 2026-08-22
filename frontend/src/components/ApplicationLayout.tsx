@@ -13,6 +13,10 @@ export function ApplicationLayout() {
     auth.currentUser?.authorization_scope.grants ?? [],
     'QUERY_DOCUMENTS',
   )
+  const canAdministerPlatform = hasCapability(
+    auth.currentUser?.authorization_scope.grants ?? [],
+    'ADMINISTER_PLATFORM',
+  )
   return (
     <div className="app-shell">
       <header className="site-header">
@@ -23,6 +27,9 @@ export function ApplicationLayout() {
           <Link to="/">Scope</Link>
           {canManageUploads ? (
             <Link to="/admin/documents">Document ingestion</Link>
+          ) : null}
+          {canAdministerPlatform ? (
+            <Link to="/admin/evaluations">Evaluations</Link>
           ) : null}
           {canQueryDocuments ? <Link to="/chat">Grounded chat</Link> : null}
           {canQueryDocuments ? (

@@ -468,3 +468,21 @@ the controlled assistant answer.
 Broad semantic entailment, reranking, message-history loading, trace persistence,
 automated retention jobs, arbitrary code, remote/dynamic MCP, production embedding
 infrastructure, and AWS remain absent.
+## Secure 42-case evaluation
+
+Platform administrators can open `/admin/evaluations` and run the checked-in `1.0.0` suite. The API accepts only the suite version and bounded advisory-judge controls; it never accepts case definitions, identities, authorization fields, expected identifiers, model routes, URLs, paths, or prompts.
+
+The suite contains exactly 42 cases: 20 authorized positives, 10 explicit denials, 4 memory-isolation checks, 4 deterministic calculations, and 4 insufficient-evidence checks. Application startup validates the count, category composition, strict schema, unique IDs, and known document identifiers. The manifest SHA-256 is attached to every run and case result.
+
+Run locally after PostgreSQL, migrations, demo seeding, and approved synthetic documents are ready:
+
+```bash
+cd backend
+uv run alembic upgrade head
+uv run python -m app.scripts.seed_development
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Use Nora's development identity for the evaluation dashboard. Alice, Leo, Maya, Amir, and Lina do not receive `ADMINISTER_PLATFORM` and cannot see or call it. The optional Gemini judge is off by default, advisory only, restricted to at most two cases, and never influences authorization or deterministic release policy.
+
+`SECURITY_FAILED` means at least one forbidden document identifier reached an evaluation result. It overrides all aggregate scores and blocks release. Reports deliberately exclude questions, prompts, reasoning, document text, evidence excerpts, raw provider bodies, credentials, and stack traces.

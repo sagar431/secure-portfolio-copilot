@@ -249,3 +249,14 @@ fake-provider, live OpenRouter Vertex, chat/API/UI, authorization, redaction, an
 
 Publish the isolated branch for review. No additional product feature is approved in this
 checkpoint.
+## Evaluation release system — complete locally
+
+- Versioned suite `1.0.0`: 42 cases exactly (20 positive, 10 denial, 4 memory, 4 calculation, 4 abstention).
+- Backend boundaries: strict contracts, manifest loader/hash, real-service runner, deterministic scorers, optional Vertex judge, PostgreSQL repository, service, admin API, and safe audit events.
+- Persistence: Alembic `20260821_0009`; `evaluation_runs` and `evaluation_case_results` contain only bounded metadata and safe identifiers.
+- API: `POST /api/admin/evaluations/run`, list/detail endpoints, and downloadable JSON report.
+- Frontend: capability-gated run controls, advisory warning, release gates, composition, metrics, routing/cost/latency, safe filters/details, download, and prominent `SECURITY_FAILED` treatment.
+- Local live deterministic result: 42 passed, 0 failed, 0 errors; every release gate scored 100%.
+- Live advisory sample: `google/gemini-3.7-flash`, provider `Google`, Vertex BYOK confirmed, strict score validation passed, shared fallback disabled.
+
+The implementation and verification artifacts remain local and uncommitted on `codex/evaluation-42`.

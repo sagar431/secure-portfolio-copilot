@@ -302,3 +302,17 @@ real excerpt, and agent UI tests. Final verification passes 302 backend and 98 f
 migration `0008 -> 0006 -> 0008` reversibility/drift checks, local MCP smoke,
 production/integrity gates, and the zero-vulnerability frontend audit. Live Gemini 3.1 Flash Lite/Gemini 3.7 Flash routing plus
 OpenRouter Vertex Perception, typed-catalog Decision, and grounded finalization pass.
+## Evaluation invariants
+
+- Only a database-derived admin grant containing `ADMINISTER_PLATFORM` with role `admin` can use evaluation endpoints or UI.
+- The request may select only suite version `1.0.0` plus an off-by-default judge toggle and a 0–2 limit.
+- Every case identity is one of the six checked-in demo identities and is reloaded with current authorization from PostgreSQL.
+- Denial is evaluated before retrieval, memory, model, agent, or judge invocation. Denied cases persist no actual identifiers and record zero model calls.
+- Retrieval and calculation use the production authorization-filtered repositories. Memory visibility includes source lifecycle and ACL reauthorization before ranking.
+- A forbidden identifier in any result marks the complete run `SECURITY_FAILED`, regardless of aggregate metrics or judge scores.
+- Persisted/API/dashboard data is limited to case/category IDs, manifest version/hash, status, bounded reason codes, safe expected/actual identifiers, numeric metrics, duration, route/model, token/cost/retry/fallback metadata, and timestamps.
+- Evaluation storage and audit logs never contain secrets, sessions, prompts, questions, hidden reasoning, unrestricted text, complete excerpts, raw provider bodies, unauthorized content, or stack traces.
+- Judge input is limited to an already-authorized controlled answer and its cited authorized evidence. Denials, memories, unrelated chunks, and unauthorized text are ineligible.
+- Unknown/foreign run IDs return one generic not-found response.
+
+Release gates are immutable in code: cross-tenant denial, cross-department denial, memory isolation, calculation exactness, and factual citation presence require 100%; Recall@5, citation support precision, and abstention correctness require at least 90%.

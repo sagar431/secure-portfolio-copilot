@@ -6,6 +6,7 @@ import { ApplicationLayout } from './components/ApplicationLayout'
 import { AuthorizedSearchPage } from './pages/AuthorizedSearchPage'
 import { ChatPage } from './pages/ChatPage'
 import { DocumentIngestionPage } from './pages/DocumentIngestionPage'
+import { EvaluationDashboardPage } from './pages/EvaluationDashboardPage'
 import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
 import { MemoryPage } from './pages/MemoryPage'
@@ -24,6 +25,12 @@ export function App() {
           </Route>
           <Route element={<CapabilityRoute capability="MANAGE_UPLOADS" />}>
             <Route path="admin/documents" element={<DocumentIngestionPage />} />
+          </Route>
+          <Route element={<CapabilityRoute capability="ADMINISTER_PLATFORM" />}>
+            <Route
+              path="admin/evaluations"
+              element={<EvaluationDashboardPage />}
+            />
           </Route>
           {import.meta.env.DEV ? (
             <Route element={<CapabilityRoute capability="QUERY_DOCUMENTS" />}>

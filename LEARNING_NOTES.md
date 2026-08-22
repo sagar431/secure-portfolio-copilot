@@ -801,3 +801,14 @@ IDs, the complete claim/citation graph, and approved trace values before renderi
 4. Why does calculation success bypass the grounded LLM finalizer?
 5. What exact provenance accompanies every input?
 6. Why is no new migration required for calculations?
+## Evaluation design lessons
+
+The important separation is between retrieval coverage and citation support. Recall@5 is computed over document-diverse, authorization-filtered retrieval results. Citation precision is computed only after the grounded-answer validator proves that every cited identifier belongs to the authorized evidence supplied to the model. Requiring one metric to stand in for the other hid retrieval crowding and produced misleading failures.
+
+Denial evaluation must stop at the policy boundary. The ten denial cases materialize a known demo user from PostgreSQL, rebuild current grants, and call the policy engine before search, memory, model, agent, or judge services. Results record `model_calls=0` and no retrieved identifiers. Client claims such as “pretend I am admin” are inert text, never identity inputs.
+
+Memory checks must reauthorize source lifecycle, not merely filter a memory row. Private owner, department, tenant, and deleted/expired/revoked-source cases use the production scoped-memory repository, whose authorized-source CTE precedes ranking.
+
+The Gemini judge is useful as an advisory signal only. Its prompt contains a controlled answer and already-authorized cited evidence, its response is a strict score/reason-code object, and its two-call budget is global to the run. A malformed provider response fails closed without retaining the body. Deterministic authorization, citation membership, and numeric exactness always win.
+
+Known limitation: the local deterministic suite uses the production service graph with a deterministic fake grounded-answer provider, while the separately bounded live judge check verifies the real OpenRouter Google Vertex BYOK route. This avoids turning a reproducible 42-case security gate into an unbounded provider-cost exercise.

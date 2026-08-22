@@ -169,13 +169,13 @@ async def search_authorized_chunks(
         0.0, 1.0 - authorized.c.embedding.cosine_distance(list(query_embedding))
     ).label("vector_score")
     final_score = (keyword_score * 0.35 + vector_score * 0.65).label("final_score")
-    statement = (
+    scored = (
         select(
             authorized.c.chunk_id,
             authorized.c.document_id,
             authorized.c.document_version_id,
             authorized.c.version_number,
-            func.left(authorized.c.content, MAX_EXCERPT_CHARACTERS),
+            func.left(authorized.c.content, MAX_EXCERPT_CHARACTERS).label("excerpt"),
             keyword_score,
             vector_score,
             final_score,
@@ -195,7 +195,55 @@ async def search_authorized_chunks(
             authorized.c.visibility,
             authorized.c.classification,
         )
-        .order_by(final_score.desc(), keyword_score.desc(), authorized.c.chunk_id)
+        .cte("scored_authorized_chunks")
+        .prefix_with("MATERIALIZED")
+    )
+    document_rank = (
+        func.row_number()
+        .over(
+            partition_by=scored.c.document_id,
+            order_by=(
+                scored.c.final_score.desc(),
+                scored.c.keyword_score.desc(),
+                scored.c.chunk_id,
+            ),
+        )
+        .label("document_rank")
+    )
+    ranked = select(*scored.c, document_rank).cte("ranked_authorized_chunks")
+    statement = (
+        select(
+            ranked.c.chunk_id,
+            ranked.c.document_id,
+            ranked.c.document_version_id,
+            ranked.c.version_number,
+            ranked.c.excerpt,
+            ranked.c.keyword_score,
+            ranked.c.vector_score,
+            ranked.c.final_score,
+            ranked.c.page_number,
+            ranked.c.sheet_name,
+            ranked.c.row_start,
+            ranked.c.row_end,
+            ranked.c.cell_start,
+            ranked.c.cell_end,
+            ranked.c.safe_filename,
+            ranked.c.source_type,
+            ranked.c.document_type,
+            ranked.c.reporting_period,
+            ranked.c.tenant_slug,
+            ranked.c.company_slug,
+            ranked.c.department,
+            ranked.c.visibility,
+            ranked.c.classification,
+        )
+        .where(ranked.c.document_rank <= 2)
+        .order_by(
+            ranked.c.document_rank,
+            ranked.c.final_score.desc(),
+            ranked.c.keyword_score.desc(),
+            ranked.c.chunk_id,
+        )
         .limit(top_k)
     )
     rows = (await session.execute(statement)).all()

@@ -517,3 +517,26 @@ call writes `READY` vectors and a count-only audit; provider failure rolls back 
 - The small curated retrieval evaluation and one-case live provider smoke are not broad quality
   benchmarks. Fixed calculators validate their arithmetic and provenance, but no broad semantic
   entailment or arbitrary numeric-analysis engine exists.
+## Evaluation subsystem
+
+`app/evaluations` is a one-way orchestration layer over existing application boundaries:
+
+```text
+checked-in manifest -> evaluation service -> runner
+                                         -> policy engine
+                                         -> authorized retrieval / citation validation
+                                         -> scoped memory repository
+                                         -> deterministic calculation repository
+                                         -> grounded chat
+                                         -> optional advisory judge (max 2)
+                                         -> deterministic scorers -> release gates
+                                         -> PostgreSQL safe results
+```
+
+The API selects only manifest `1.0.0`. Strict Pydantic contracts forbid extra fields and startup fails unless there are exactly 20 authorized positive, 10 explicit denial, 4 memory isolation, 4 deterministic calculation, and 4 insufficient-evidence cases. A canonical JSON SHA-256 binds persisted results to the checked-in content.
+
+Alembic revision `20260821_0009` adds `evaluation_runs` and `evaluation_case_results`. Run states are explicit: `PENDING`, `RUNNING`, `PASSED`, `FAILED`, `SECURITY_FAILED`, and `ERROR`. A PostgreSQL advisory transaction lock serializes the active-run check/create operation; the durable active row rejects duplicates for the rest of execution.
+
+Retrieval applies tenant/company/department/lifecycle authorization in a materialized CTE before scoring. A second ranking stage round-robins the highest-ranked chunks per document, preventing one long document from crowding every slot in document-level Recall@5. No evaluator-only ACL shortcut exists.
+
+The optional judge uses `google/gemini-3.7-flash`, forces `google-vertex`, disables fallback, denies data collection, sends no tools or reasoning parameter, uses prompt-only JSON, validates locally, permits one provider attempt per judged case, and stops at two total calls.

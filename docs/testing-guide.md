@@ -556,3 +556,50 @@ refresh.
 - An agent run ends `failed/tool_error|model_error`: inspect request/session IDs and safe reason
   codes only. Do not log prompts, queries, MCP arguments/results, evidence, provider bodies, or raw
   exceptions.
+## Evaluation verification
+
+The focused backend suite covers manifest composition/schema/hash, duplicates and invalid identifiers, deterministic scorers and thresholds, all denial pre-model boundaries, memory and abstention fail-closed behavior, calculation regressions, strict/bounded judge behavior, API authorization and safe errors, duplicate-run locking, persistence safety, and report download.
+
+```bash
+cd backend
+uv run ruff format --check .
+uv run ruff check .
+uv run mypy app
+uv run pytest tests/unit/evaluations tests/integration/test_evaluation_api.py
+uv run pytest
+```
+
+The dashboard suite covers capability routing plus empty, running, completed, API failure, and `SECURITY_FAILED` states; exact composition; metrics; safe filtering/details; and JSON download.
+
+```bash
+cd frontend
+npm run format:check
+npm run lint
+npm run typecheck
+npm run test -- --run
+npm audit --audit-level=moderate
+npm run build
+```
+
+Migration and infrastructure verification:
+
+```bash
+docker compose config --quiet
+cd backend
+uv run alembic upgrade head
+uv run alembic check
+uv run alembic downgrade 20260821_0008
+uv run alembic upgrade head
+uv run alembic check
+```
+
+Metric formulas:
+
+- Denial, memory, calculation, citation presence, and abstention rates are passing applicable cases divided by applicable cases.
+- Recall@5 is required authorized document identifiers found in the first five document-diverse results divided by required identifiers.
+- Citation support precision is validator-confirmed citations divided by all emitted citations.
+- Average latency is the arithmetic mean; P95 uses nearest-rank order statistics.
+- Token, cost, retry, fallback, and route values are summed or counted from safe provider metadata.
+- The insufficient-evidence probe uses a conservative 0.40 final-score threshold when there is no lexical match; normal grounded-chat relevance behavior is unchanged and remains separately regression-tested.
+
+Interpret `FAILED` as one or more quality gates/cases failing, `ERROR` as a safe execution/infrastructure failure, and `SECURITY_FAILED` as a confirmed authorization leak that unconditionally blocks release. The judge badge is always `ADVISORY_ONLY`.

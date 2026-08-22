@@ -12,6 +12,7 @@ from app.models.documents import (
     ParsedRow,
     ParsedSheet,
 )
+from app.models.evaluations import EvaluationCaseResult, EvaluationRun
 from app.models.identity import (
     Company,
     CompanyGrant,
@@ -36,6 +37,8 @@ __all__ = [
     "DocumentAuditEvent",
     "DocumentChunk",
     "DocumentVersion",
+    "EvaluationCaseResult",
+    "EvaluationRun",
     "IngestionJob",
     "Membership",
     "Message",
