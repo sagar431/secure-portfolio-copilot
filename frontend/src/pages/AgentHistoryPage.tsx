@@ -148,6 +148,10 @@ export function AgentHistoryPage() {
                 <dd>{label(run.response_mode)}</dd>
               </div>
               <div>
+                <dt>Agent control</dt>
+                <dd>{label(run.agent_control_mode)}</dd>
+              </div>
+              <div>
                 <dt>Model tier</dt>
                 <dd>
                   {run.selected_model_tier

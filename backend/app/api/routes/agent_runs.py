@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.approval_service import AgentApprovalService
 from app.agent.factory import agent_route_reason, create_agent_stage_providers
 from app.agent.gateway_adapter import AgentGatewayAdapter
 from app.agent.loop import AgentLoop
@@ -22,10 +23,18 @@ from app.mcp_gateway.adapters import (
     SearchAuthorizedDocumentsAdapter,
 )
 from app.mcp_gateway.gateway import ApprovedToolAdapter, ApprovedToolGateway
+from app.schemas.agent_runs import (
+    ApprovalStateData,
+    AwaitingApprovalData,
+    ChangeAgentRequest,
+    ResolveApprovalRequest,
+    SafelyTerminatedData,
+)
 from app.schemas.api import SuccessResponse
-from app.schemas.chat import AgentRunMessageData, CreateMessageRequest
+from app.schemas.chat import AgentRunMessageData, CreateAgentRunRequest
 
 router = APIRouter(prefix="/api/conversations", tags=["agent-runs"])
+approval_router = APIRouter(prefix="/api/agent-runs", tags=["agent-approvals"])
 
 
 def get_agent_run_service(
@@ -73,22 +82,116 @@ def get_agent_run_service(
 AgentService = Annotated[AgentRunService, Depends(get_agent_run_service)]
 
 
+def get_agent_approval_service(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    runner: AgentService,
+) -> AgentApprovalService:
+    return AgentApprovalService(session, runner)
+
+
+ApprovalService = Annotated[AgentApprovalService, Depends(get_agent_approval_service)]
+
+
 @router.post(
     "/{conversation_id}/agent-runs",
-    response_model=SuccessResponse[AgentRunMessageData],
+    response_model=SuccessResponse[AgentRunMessageData | AwaitingApprovalData],
 )
 async def create_agent_run(
     conversation_id: UUID,
-    payload: CreateMessageRequest,
+    payload: CreateAgentRunRequest,
     request: Request,
     context: CurrentAuthorizationContext,
     service: AgentService,
-) -> SuccessResponse[AgentRunMessageData]:
+) -> SuccessResponse[AgentRunMessageData | AwaitingApprovalData]:
     data = await service.run(
         context,
         conversation_id=conversation_id,
         question=payload.content,
         response_mode=payload.response_mode,
+        agent_control_mode=payload.agent_control_mode,
         request_id=request.state.request_id,
     )
     return SuccessResponse(data=data, request_id=request.state.request_id)
+
+
+@approval_router.get(
+    "/{run_id}/approval",
+    response_model=SuccessResponse[ApprovalStateData],
+)
+async def get_current_approval(
+    run_id: UUID,
+    request: Request,
+    context: CurrentAuthorizationContext,
+    service: ApprovalService,
+) -> SuccessResponse[ApprovalStateData]:
+    return SuccessResponse(
+        data=await service.current(context, run_id=run_id),
+        request_id=request.state.request_id,
+    )
+
+
+@approval_router.post(
+    "/{run_id}/approvals/{approval_id}/resolve",
+    response_model=SuccessResponse[
+        AgentRunMessageData | AwaitingApprovalData | SafelyTerminatedData
+    ],
+)
+async def resolve_approval(
+    run_id: UUID,
+    approval_id: UUID,
+    payload: ResolveApprovalRequest,
+    request: Request,
+    context: CurrentAuthorizationContext,
+    service: ApprovalService,
+) -> SuccessResponse[AgentRunMessageData | AwaitingApprovalData | SafelyTerminatedData]:
+    data: AgentRunMessageData | AwaitingApprovalData | SafelyTerminatedData
+    if payload.action == "reject":
+        data = await service.reject(context, run_id=run_id, approval_id=approval_id)
+    else:
+        data = await service.approve_once(
+            context,
+            run_id=run_id,
+            approval_id=approval_id,
+            request_id=request.state.request_id,
+        )
+    return SuccessResponse(data=data, request_id=request.state.request_id)
+
+
+@approval_router.post(
+    "/{run_id}/stop",
+    response_model=SuccessResponse[SafelyTerminatedData],
+)
+async def stop_agent_run(
+    run_id: UUID,
+    request: Request,
+    context: CurrentAuthorizationContext,
+    service: ApprovalService,
+) -> SuccessResponse[SafelyTerminatedData]:
+    return SuccessResponse(
+        data=await service.stop(context, run_id=run_id),
+        request_id=request.state.request_id,
+    )
+
+
+@approval_router.post(
+    "/{run_id}/approvals/{approval_id}/change-request",
+    response_model=SuccessResponse[AgentRunMessageData | AwaitingApprovalData],
+)
+async def change_agent_request(
+    run_id: UUID,
+    approval_id: UUID,
+    payload: ChangeAgentRequest,
+    request: Request,
+    context: CurrentAuthorizationContext,
+    service: ApprovalService,
+) -> SuccessResponse[AgentRunMessageData | AwaitingApprovalData]:
+    return SuccessResponse(
+        data=await service.change_request(
+            context,
+            run_id=run_id,
+            approval_id=approval_id,
+            content=payload.content,
+            request_id=request.state.request_id,
+        ),
+        request_id=request.state.request_id,
+    )

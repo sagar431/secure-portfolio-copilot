@@ -16,6 +16,7 @@ export interface AgentRunHistorySummary {
   id: string
   conversation_id: string
   response_mode: ResponseMode
+  agent_control_mode: 'guided' | 'balanced' | 'autonomous'
   selected_model_tier: 'fast' | 'deep' | null
   selected_model_name: SafeModelName | null
   status: AgentRunStatus

@@ -428,6 +428,34 @@ leaks, so Step 5 does not add a reranker. Ad hoc queries remain correctly marked
 10. Why is the deterministic fake suitable for tests but not a production semantic-quality claim?
 11. Which citation fields are checked against the enclosing result by the frontend?
 12. Why do curated queries show a measured result while ad hoc queries say `not_run`?
+
+## Human approval: intent is not authority
+
+Fast/Auto/Deep selects model cost and capability. Guided/Balanced/Autonomous independently controls
+when an already-authorized tool action needs human intent. Guided pauses every action; Balanced runs
+the current low-risk read-only tools automatically; Autonomous stays inside the same allowlist,
+authorization checks, evidence rules, and host budgets. An unknown future tool defaults to
+`ALWAYS_REQUIRE_APPROVAL`.
+
+The durable pause stores only content-free metadata and hashes. Approving reloads the current user,
+membership, and grants; locks the owned row; verifies expiry, immutable plan/step coordinates, tool,
+scope fingerprint, and canonical action hash; and consumes the approval once. Reject and Stop never
+call a tool. Change request cancels the old run and creates a new bounded path, preserving immutable
+history.
+
+Resume deliberately does not persist raw arguments or a serialized model checkpoint. It rebuilds
+completed observations from authorized identifiers and asks the typed agent stages to reconstruct
+the next action. This trades availability for confidentiality: model drift may change the hash, in
+which case execution fails closed and the user starts or changes the request.
+
+### Questions Sagar should be able to answer
+
+1. Why can approval never replace authorization or restore a revoked grant?
+2. What exactly binds one approval to one action, and how is replay prevented?
+3. Why are raw arguments absent from the approval row, browser, logs, and history?
+4. What happens when plan, step, scope, expiry, or action reconstruction changes?
+5. Why does Autonomous still pause for `ALWAYS_REQUIRE_APPROVAL`?
+6. How do Reject, Stop, and Change request differ in persisted lifecycle semantics?
 13. Why is an embedding model not an LLM authorization, reranking, or answer-generation component?
 14. Why is there no keyword-only fallback when query embedding fails?
 

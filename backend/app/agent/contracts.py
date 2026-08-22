@@ -70,6 +70,8 @@ class DecisionProvider(Protocol):
 
 
 class ApprovedToolGateway(Protocol):
+    def set_evidence_sequence(self, value: int) -> None: ...
+
     async def execute(
         self,
         *,

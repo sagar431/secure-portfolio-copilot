@@ -2,12 +2,12 @@ from typing import Any, cast
 from uuid import UUID
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.auth.repository import build_authorization_context, get_user_by_email
 from app.mcp_gateway.adapters import GetDocumentExcerptAdapter
 from app.mcp_gateway.contracts import GetDocumentExcerptInput, ToolPayload
-from app.models.agent_runs import AgentRun
+from app.models.agent_runs import AgentApprovalRequest, AgentRun
 from app.models.chat import ChatRequestTrace, Message
 from tests.conftest import AuthHarness
 from tests.integration.test_authorized_search import (
@@ -243,6 +243,10 @@ async def test_fast_agent_api_requires_deep_without_persisting_messages(
             .scalars()
             .all()
         )
+        approval_count = await session.scalar(
+            select(func.count()).select_from(AgentApprovalRequest)
+        )
     assert messages == []
     assert traces == []
     assert persisted_runs == []
+    assert approval_count == 0

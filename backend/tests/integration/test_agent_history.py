@@ -136,6 +136,7 @@ async def test_grounded_run_persists_safe_ordered_history_and_serializes_list_de
         "id",
         "conversation_id",
         "response_mode",
+        "agent_control_mode",
         "selected_model_tier",
         "selected_model_name",
         "status",

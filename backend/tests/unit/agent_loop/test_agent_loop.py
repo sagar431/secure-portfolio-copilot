@@ -2,13 +2,14 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.agent.approval_security import canonical_action_hash
 from app.agent.contracts import AgentModelError, AgentModelErrorCode
 from app.agent.fake import (
     DeterministicFakeDecisionProvider,
     DeterministicFakeGateway,
     DeterministicFakePerceptionProvider,
 )
-from app.agent.loop import AgentLoop
+from app.agent.loop import AgentLoop, ReconstructedStep
 from app.agent.models import (
     Action,
     ActionType,
@@ -40,6 +41,7 @@ from app.mcp_gateway.contracts import (
     SearchAuthorizedDocumentsInput,
 )
 from app.mcp_gateway.gateway import ApprovedToolGateway
+from app.models.agent_runs import AgentControlMode
 from app.models.identity import Capability, GrantSource
 from app.policies.models import (
     AuthorizationContext,
@@ -275,6 +277,49 @@ async def test_real_two_step_plan_executes_search_excerpt_then_finalization_in_o
     assert perception.step_result_inputs[0][2].steps[0].status == StepStatus.COMPLETED
     assert len(perception.step_result_inputs[1][3]) == 2
     assert result.citations[0].citation_id == "ev_2"
+
+
+@pytest.mark.asyncio
+async def test_guided_resume_replays_completed_step_and_calls_only_approved_next_tool() -> None:
+    search = _search()
+    first_evidence = _evidence()
+    excerpt = _excerpt(first_evidence.document_id, first_evidence.chunk_id)
+    finalize = _terminal_action(ActionType.FINALIZE)
+    actions = (search, excerpt, finalize)
+    first_observation = _observation(SEARCH, evidence=(first_evidence,))
+    loop, _, gateway = _loop(
+        (
+            _perception(PerceptionMode.USER_QUERY),
+            _perception(PerceptionMode.STEP_RESULT, EvidenceStatus.INSUFFICIENT),
+            _perception(PerceptionMode.STEP_RESULT, EvidenceStatus.SUFFICIENT),
+        ),
+        (
+            _decision(actions, 0),
+            _decision(actions, 1, completed=1),
+            _decision(actions, 2, completed=2),
+        ),
+        (_observation(EXCERPT, evidence=(_evidence("ev_2"),)),),
+        final_answer=GroundedAnswerDraft(
+            "supported", (GroundedClaimDraft("Supported.", ("ev_2",)),)
+        ),
+    )
+    context = _context()
+    result = await loop.run(
+        query="What was synthetic revenue?",
+        authorization_context=context,
+        permitted_tool_catalog=_catalog(context),
+        request_id="guided-reconstruction",
+        agent_control_mode=AgentControlMode.GUIDED,
+        approved_action_hash=canonical_action_hash(excerpt),
+        reconstructed_steps=(
+            ReconstructedStep(
+                action_hash=canonical_action_hash(search), observation=first_observation
+            ),
+        ),
+    )
+
+    assert result.terminal_status == TerminalStatus.COMPLETED
+    assert [call[0] for call in gateway.calls] == [EXCERPT]
 
 
 @pytest.mark.asyncio

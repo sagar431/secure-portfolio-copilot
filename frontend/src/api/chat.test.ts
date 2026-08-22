@@ -144,6 +144,7 @@ describe('conversation API', () => {
     expect(JSON.parse(options.body)).toEqual({
       content: 'Use the bounded workflow.',
       response_mode: 'auto',
+      agent_control_mode: 'balanced',
     })
   })
 

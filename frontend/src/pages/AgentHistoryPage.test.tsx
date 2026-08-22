@@ -127,6 +127,29 @@ describe('AgentHistoryPage', () => {
     )
   })
 
+  it('reloads a persisted awaiting-approval run from history', async () => {
+    vi.mocked(agentHistoryApi.listAgentRuns).mockResolvedValueOnce({
+      data: {
+        runs: [
+          {
+            ...agentHistorySummary,
+            agent_control_mode: 'guided',
+            status: 'AWAITING_APPROVAL',
+            safe_reason_code: 'USER_APPROVAL_REQUIRED',
+            completed_at: null,
+            step_count: 0,
+          },
+        ],
+        next_cursor: null,
+      },
+      request_id: 'awaiting-list',
+    })
+    renderPage()
+    expect(await screen.findByText('awaiting approval')).toBeInTheDocument()
+    expect(screen.getByText('guided')).toBeInTheDocument()
+    expect(screen.getByText('USER_APPROVAL_REQUIRED')).toBeInTheDocument()
+  })
+
   it('renders safe list errors and generic inaccessible detail state', async () => {
     vi.mocked(agentHistoryApi.listAgentRuns)
       .mockRejectedValueOnce(

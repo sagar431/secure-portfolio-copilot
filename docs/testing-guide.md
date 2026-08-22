@@ -652,7 +652,7 @@ and workbook both match, so Auto correctly resolves it to Deep.
 
 ## Persistent agent-history verification
 
-Focused coverage validates the state graph (including the prepared AWAITING_APPROVAL state), table
+Focused coverage validates the state graph (including the durable AWAITING_APPROVAL state), table
 constraints, migration symmetry, immutable plan updates, step ordering/duplicate rejection,
 authorization-validated observations, successful/refused/insufficient/provider-error/limit
 termination, Fast no-run behavior, cursor pagination, forged filters, tenant/user isolation,
@@ -662,7 +662,7 @@ generic 404 behavior, exact safe serialization, and content-free persistence.
 cd backend
 uv run pytest -q tests/unit/agent_history tests/unit/agent_loop/test_agent_loop.py
 uv run pytest -q tests/integration/test_agent_history.py \
-  tests/integration/test_agent_runs.py
+  tests/integration/test_agent_runs.py tests/integration/test_agent_approvals.py
 
 cd ../frontend
 npm test -- --run src/api/agentHistory.test.ts \
@@ -675,7 +675,7 @@ The required reversible migration gate is:
 cd backend
 uv run alembic upgrade head
 uv run alembic check
-uv run alembic downgrade 20260821_0009
+uv run alembic downgrade 20260822_0010
 uv run alembic upgrade head
 uv run alembic check
 ```
@@ -686,3 +686,28 @@ record, and confirms ordered Perception, Policy, Decision, Tool, Observation, an
 Inspect only status/mode/model tier/duration/reason/tool/count metadata. Confirm no question, prompt,
 reasoning, raw argument, excerpt, document text, memory content, scope, credential, path, or stack
 trace appears in the page, API response, new tables, or logs.
+
+## Human-approval acceptance
+
+Run the focused security gate with PostgreSQL:
+
+```bash
+cd backend
+uv run pytest -q tests/integration/test_agent_approvals.py \
+  tests/unit/agent_loop/test_approval_security.py \
+  tests/unit/agent_loop/test_agent_loop.py \
+  tests/security/test_agent_security.py \
+  tests/security/test_response_mode_agent_security.py
+```
+
+This covers Guided pause/one-action resume, zero-call rejection, cancellation, immutable change
+history, Balanced/Autonomous behavior, unknown-tool default risk, expiry, replay, concurrent clicks,
+tampered request bodies, action/scope/plan/step binding drift, current identity revocation, generic
+foreign/unknown 404 responses, bounded reconstruction, and safe public/storage projections.
+
+Authenticated browser acceptance uses the isolated `portfolio_test` database with fake providers.
+Verify Guided approve/reject/stop/change, Balanced automatic retrieval, Autonomous deterministic
+calculation, Leo denial before approval, expired/replayed/hash-mismatched fail-closed responses,
+Agent History pause/final states after reload, keyboard-accessible controls, and an empty browser
+error console. Pair browser evidence with database counts so zero-call and immutable-history claims
+are not inferred from presentation alone.

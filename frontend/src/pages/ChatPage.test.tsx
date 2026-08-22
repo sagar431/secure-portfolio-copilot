@@ -26,6 +26,9 @@ vi.mock('../api/chat', () => ({
   createConversation: vi.fn(),
   runConversationAgent: vi.fn(),
   sendConversationMessage: vi.fn(),
+  resolveAgentApproval: vi.fn(),
+  stopAgentRun: vi.fn(),
+  changeAgentRequest: vi.fn(),
 }))
 
 function authValue(capabilities: Capability[] = ['QUERY_DOCUMENTS']) {
@@ -77,6 +80,31 @@ function submitQuestion(question = 'Why did margin improve?') {
   fireEvent.submit(
     screen.getByRole('button', { name: 'Ask copilot' }).closest('form')!,
   )
+}
+
+function pendingApprovalData() {
+  return {
+    outcome: 'awaiting_approval' as const,
+    conversation_id: conversationData.id,
+    user_message_id: '81818181-8181-4181-8181-818181818181',
+    agent_session_id: '82828282-8282-4282-8282-828282828282',
+    agent_control_mode: 'guided' as const,
+    approval: {
+      approval_id: '83838383-8383-4383-8383-838383838383',
+      run_id: '82828282-8282-4282-8282-828282828282',
+      status: 'PENDING' as const,
+      action_label: 'Search authorized documents <script>alert(1)</script>',
+      safe_explanation:
+        'Use an allow-listed tool within your current authorized scope.',
+      tool_name: 'portfolio.search_authorized_documents' as const,
+      risk_level: 'LOW_READ_ONLY' as const,
+      resource_type: 'authorized portfolio documents' as const,
+      estimated_cost_class: 'low' as const,
+      safe_scope_summary: 'Orion Capital · Finance',
+      remaining_budget: { steps: 4, tools: 4 },
+      expires_at: '2099-08-22T12:00:00Z',
+    },
+  }
 }
 
 describe('ChatPage', () => {
@@ -182,6 +210,7 @@ describe('ChatPage', () => {
         'Use the approved document tools.',
         expect.any(AbortSignal),
         'auto',
+        'balanced',
       ),
     )
     expect(chatApi.sendConversationMessage).not.toHaveBeenCalled()
@@ -218,6 +247,199 @@ describe('ChatPage', () => {
       screen.getByRole('dialog', { name: 'orion-finance.xlsx' }),
     ).toBeInTheDocument()
     expect(document.querySelector('script')).toBeNull()
+  })
+
+  it('renders a safe accessible approval card and disables duplicate resolution clicks', async () => {
+    const pending = pendingApprovalData()
+    vi.mocked(chatApi.runConversationAgent).mockResolvedValueOnce({
+      data: pending,
+      request_id: 'pending-request',
+    })
+    let finish!: (value: {
+      data: typeof agentRunData
+      request_id: string
+    }) => void
+    vi.mocked(chatApi.resolveAgentApproval).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+    )
+    renderPage()
+    await screen.findByRole('heading', { name: 'Orion finance review' })
+    fireEvent.click(screen.getByRole('radio', { name: /Guided/ }))
+    fireEvent.change(screen.getByLabelText('Ask about approved documents'), {
+      target: { value: 'Use the approved document tools.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run bounded agent' }))
+
+    const card = await screen.findByRole('region', {
+      name: /Search authorized documents/,
+    })
+    expect(
+      within(card).getByText('Orion Capital · Finance'),
+    ).toBeInTheDocument()
+    expect(within(card).getByText('4 steps · 4 tools')).toBeInTheDocument()
+    expect(document.querySelector('script')).toBeNull()
+    expect(within(card).queryByText(/raw arguments/i)).toBeInTheDocument()
+
+    const approve = within(card).getByRole('button', { name: 'Approve once' })
+    fireEvent.click(approve)
+    await waitFor(() => expect(approve).toBeDisabled())
+    fireEvent.click(approve)
+    expect(chatApi.resolveAgentApproval).toHaveBeenCalledTimes(1)
+    finish({ data: agentRunData, request_id: 'approved-request' })
+    expect(await screen.findByText(/Run completed after/)).toBeInTheDocument()
+  })
+
+  it('keeps response and agent-control modes independent', async () => {
+    vi.mocked(chatApi.runConversationAgent).mockResolvedValueOnce({
+      data: pendingApprovalData(),
+      request_id: 'pending-request',
+    })
+    renderPage()
+    await screen.findByRole('heading', { name: 'Orion finance review' })
+    const responseModes = screen.getByRole('group', { name: 'Response mode' })
+    const controlModes = screen.getByRole('group', {
+      name: 'Agent control mode',
+    })
+    expect(within(responseModes).getAllByRole('radio')).toHaveLength(3)
+    expect(within(controlModes).getAllByRole('radio')).toHaveLength(3)
+    fireEvent.click(within(responseModes).getByRole('radio', { name: /Deep/ }))
+    fireEvent.click(within(controlModes).getByRole('radio', { name: /Guided/ }))
+    fireEvent.change(screen.getByLabelText('Ask about approved documents'), {
+      target: { value: 'Use one authorized tool.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run bounded agent' }))
+    await waitFor(() =>
+      expect(chatApi.runConversationAgent).toHaveBeenCalledWith(
+        'signed-alice-token',
+        conversationData.id,
+        'Use one authorized tool.',
+        expect.any(AbortSignal),
+        'deep',
+        'guided',
+      ),
+    )
+  })
+
+  it('supports reject, stop, and changed-request resolution paths', async () => {
+    const pending = pendingApprovalData()
+    vi.mocked(chatApi.runConversationAgent).mockResolvedValue({
+      data: pending,
+      request_id: 'pending-request',
+    })
+    vi.mocked(chatApi.resolveAgentApproval).mockResolvedValueOnce({
+      data: {
+        outcome: 'terminated',
+        run_id: pending.agent_session_id,
+        status: 'REJECTED',
+        safe_message: 'The action was rejected and not run.',
+      },
+      request_id: 'reject-request',
+    })
+    renderPage()
+    await screen.findByRole('heading', { name: 'Orion finance review' })
+    fireEvent.click(screen.getByRole('radio', { name: /Guided/ }))
+    fireEvent.change(screen.getByLabelText('Ask about approved documents'), {
+      target: { value: 'Reject this action.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run bounded agent' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Reject' }))
+    expect(
+      await screen.findByText('The action was rejected and not run.'),
+    ).toBeInTheDocument()
+    expect(chatApi.resolveAgentApproval).toHaveBeenCalledWith(
+      'signed-alice-token',
+      pending.agent_session_id,
+      pending.approval.approval_id,
+      'reject',
+    )
+
+    vi.mocked(chatApi.stopAgentRun).mockResolvedValueOnce({
+      data: {
+        outcome: 'terminated',
+        run_id: pending.agent_session_id,
+        status: 'CANCELLED',
+        safe_message: 'The run was stopped safely.',
+      },
+      request_id: 'stop-request',
+    })
+    fireEvent.change(screen.getByLabelText('Ask about approved documents'), {
+      target: { value: 'Stop this action.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run bounded agent' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop run' }))
+    expect(
+      await screen.findByText('The run was stopped safely.'),
+    ).toBeInTheDocument()
+
+    const changed = {
+      ...pending,
+      agent_session_id: '84848484-8484-4484-8484-848484848484',
+      approval: {
+        ...pending.approval,
+        approval_id: '85858585-8585-4585-8585-858585858585',
+        run_id: '84848484-8484-4484-8484-848484848484',
+      },
+    }
+    vi.mocked(chatApi.changeAgentRequest).mockResolvedValueOnce({
+      data: changed,
+      request_id: 'change-request',
+    })
+    fireEvent.change(screen.getByLabelText('Ask about approved documents'), {
+      target: { value: 'Change this action.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run bounded agent' }))
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Change request' }),
+    )
+    fireEvent.change(screen.getByLabelText('Changed request'), {
+      target: { value: 'Use a narrower approved request.' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Submit changed request' }),
+    )
+    expect(
+      await screen.findByText(/old run was cancelled and a new bounded plan/i),
+    ).toBeInTheDocument()
+    expect(chatApi.changeAgentRequest).toHaveBeenCalledWith(
+      'signed-alice-token',
+      pending.agent_session_id,
+      pending.approval.approval_id,
+      'Use a narrower approved request.',
+    )
+  })
+
+  it('removes replayed approvals after a fail-closed response', async () => {
+    const pending = pendingApprovalData()
+    vi.mocked(chatApi.runConversationAgent).mockResolvedValueOnce({
+      data: pending,
+      request_id: 'pending-request',
+    })
+    vi.mocked(chatApi.resolveAgentApproval).mockRejectedValueOnce(
+      new ApiError(
+        'unsafe detail',
+        409,
+        'approval_unavailable',
+        'replay-request',
+      ),
+    )
+    renderPage()
+    await screen.findByRole('heading', { name: 'Orion finance review' })
+    fireEvent.click(screen.getByRole('radio', { name: /Guided/ }))
+    fireEvent.change(screen.getByLabelText('Ask about approved documents'), {
+      target: { value: 'Replay this action.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Run bounded agent' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve once' }))
+    expect(
+      await screen.findByText(
+        /could not be resumed safely and was not executed/i,
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Approve once' }),
+    ).not.toBeInTheDocument()
   })
 
   it('renders deterministic formula, trusted inputs, result, and evidence controls', async () => {
@@ -294,7 +516,9 @@ describe('ChatPage', () => {
         /Retrieving authorized evidence and validating citations/,
       ),
     ).toBeInTheDocument()
-    expect(screen.getByRole('radio', { name: /Auto/ })).toBeDisabled()
+    expect(
+      screen.getByRole('radio', { name: /^Auto Recommended/ }),
+    ).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: 'Cancel response' }))
 
     expect(await screen.findByText('Request canceled')).toBeInTheDocument()

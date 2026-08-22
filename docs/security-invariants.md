@@ -2,6 +2,21 @@
 
 These rules apply now and must remain true as later milestones are approved.
 
+0a. **Authorization and approval are separate.** Authorization determines what the current
+    database identity may do. Approval records one user's intent to perform one already-authorized
+    action now; it never creates, restores, or expands a grant, role, capability, scope, allowlist, or
+    budget.
+0b. **Approval is content-free and single-use.** Pending rows contain only safe categorical metadata
+    and cryptographic hashes. They contain no raw arguments, query copies, prompts, reasoning,
+    document/memory content, secrets, tokens, provider bodies, full scopes, paths, or stack traces.
+0c. **Resume reauthorizes and reconstructs.** Resolution reloads identity and grants, locks the row,
+    checks owner/tenant/status/expiry/plan/step/tool/scope binding, consumes it once, and requires the
+    newly reconstructed canonical action hash to match before a tool call. Drift, expiry, replay,
+    revocation, and concurrency fail closed.
+0d. **Control modes remain bounded.** Guided pauses before every tool; Balanced auto-runs only the
+    existing authorized low-risk read-only tools; Autonomous still obeys policy, capabilities, tenant
+    isolation, evidence validation, allowlists, and budgets. `ALWAYS_REQUIRE_APPROVAL` is never bypassed.
+
 1. **No real portfolio data.** Only explicitly synthetic data may exist in this repository.
 2. **No secret commits.** `.env`, credentials, and private keys remain ignored; `.env.example`
    contains development placeholders only.
@@ -340,8 +355,8 @@ Release gates are immutable in code: cross-tenant denial, cross-department denia
 105. **Authorization precedes run creation.** Conversation ownership and current
      `QUERY_DOCUMENTS` capability must succeed first. Fast upgrade rejection creates no run.
 106. **State transitions are host-owned.** Only the explicit CREATED/RUNNING/AWAITING_APPROVAL and
-     terminal transition graph is accepted. Terminal states cannot reopen; approval behavior is not
-     implemented.
+     terminal transition graph is accepted. Terminal states cannot reopen; only a validated,
+     single-use approval may transition AWAITING_APPROVAL back to RUNNING.
 107. **Persistence is content-free by schema.** Agent history has no question, answer, prompt,
      reasoning, plan text, raw argument/result, excerpt, memory, scope, credential, path, or stack
      trace columns.

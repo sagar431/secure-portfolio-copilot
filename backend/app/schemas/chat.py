@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.model_routing import ResponseMode
+from app.models.agent_runs import AgentControlMode
 from app.openrouter_vertex import OPENROUTER_HEAVY_MODEL, OPENROUTER_SIMPLE_MODEL
 
 
@@ -67,6 +68,10 @@ class CreateMessageRequest(BaseModel):
         if not normalized:
             raise ValueError("Message must not be blank")
         return normalized
+
+
+class CreateAgentRunRequest(CreateMessageRequest):
+    agent_control_mode: AgentControlMode = Field(default=AgentControlMode.BALANCED, strict=False)
 
 
 class GroundedClaimData(BaseModel):

@@ -1,4 +1,4 @@
-# Step 9 + Interview Features Architecture
+# Agent Approval Controls Architecture
 
 ## Scope
 
@@ -54,7 +54,13 @@ flowchart LR
     AgentAPI --> Perception[Typed Perception]
     Perception --> AgentPolicy[Host policy + request shortlist]
     AgentPolicy --> Decision[Typed Decision: one action]
-    Decision --> MCPClient[Official in-process MCP client]
+    Decision --> ApprovalPolicy{Agent control + risk policy}
+    ApprovalPolicy -->|auto-execute| MCPClient[Official in-process MCP client]
+    ApprovalPolicy -->|pause| ApprovalRows[(Safe single-use approval metadata)]
+    Browser -->|approve reject change stop| ApprovalAPI[Approval resolution API]
+    ApprovalAPI --> Identity
+    ApprovalAPI --> ApprovalRows
+    ApprovalAPI -->|validated same-run resume| Decision
     MCPClient --> MCPServer[Request-scoped MCP server]
     MCPServer --> Gateway[ApprovedToolGateway]
     Gateway --> DocTools[Authorized search or excerpt]
@@ -92,8 +98,37 @@ steps, and safe observations. Observation document/chunk pairs are reauthorized 
 materialized chunk statement before insertion. Messages, the existing request trace, history rows,
 and terminal status commit together. Any validation/database failure rolls this transaction back;
 the prior checkpoint is then marked FAILED with a content-free reason. Request cancellation maps to
-CANCELLED. `AWAITING_APPROVAL` is represented in the state graph for a later milestone but no
-approval or resume endpoint exists.
+CANCELLED. `AWAITING_APPROVAL` is now a durable state. Guided pauses before every tool. Balanced
+automatically executes the five existing low-risk read-only retrieval/calculator tools, while
+Autonomous executes authorized allow-listed tools inside the same fixed host budgets. Any future
+tool that is not explicitly classified defaults to `ALWAYS_REQUIRE_APPROVAL`; none is added here.
+
+An approval row stores only IDs, plan/step coordinates, approved names, SHA-256 action and scope
+fingerprints, categorical risk/reason/status, expiry, resolver ID, and timestamps. A partial unique
+index permits one `PENDING` row per run. Raw arguments, queries, prompts, document or memory content,
+authorization objects, tokens, provider bodies, reasoning, paths, and stack traces are excluded.
+
+Resolution reloads the authenticated user, memberships, tenant status, and grants through the normal
+authentication dependency, then locks the owned run and approval rows. Foreign and unknown IDs share
+the same 404. Expired, resolved, replayed, mismatched, and scope-drifted approvals fail closed. The
+transaction marks an approval consumed before execution, so concurrent clicks cannot execute twice.
+Before consumption, the host also checks the stored latest plan version, next global step number,
+allow-listed tool/action equality, and run plan count; binding drift terminates without a tool call.
+Approval does not add a capability or alter the allowlist.
+The implementation uses this locked, owner-scoped database row as the equivalent host-owned
+single-use mechanism; approval IDs are locators, not bearer secrets, and no approval token is exposed
+to or stored by the browser.
+
+Resume uses the run's immutable initial conversation-message reference and reruns typed Perception
+and Decision under the freshly derived scope. The reconstructed canonical action must hash to the
+approved hash before the gateway can run. A mismatch marks the run failed and performs no tool call.
+Completed plan versions remain immutable. This design intentionally depends on deterministic
+reconstruction; provider or plan drift fails closed and the user must start a new run. It does not
+persist a raw model checkpoint or resumable arguments in trace/history tables.
+
+Reject and Stop call no tool and terminate the old run safely. Change request supersedes the pending
+approval, cancels the old immutable run, and submits bounded replacement text as a new authorized run
+instead of rewriting completed history.
 
 History list/detail routes derive tenant and user from the authenticated database context. The list
 uses descending `(created_at, id)` keyset pagination with an opaque cursor. Detail loading eagerly

@@ -2,9 +2,9 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.agent_runs import AgentRunStatus
+from app.models.agent_runs import AgentControlMode, AgentRunStatus, ApprovalRiskClass
 
 SafeReasonCode = Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{1,95}$")]
 SafeToolName = Annotated[
@@ -21,6 +21,7 @@ class AgentRunHistorySummaryData(BaseModel):
     id: UUID
     conversation_id: UUID
     response_mode: Literal["fast", "auto", "deep"]
+    agent_control_mode: AgentControlMode
     selected_model_tier: Literal["fast", "deep"] | None
     selected_model_name: Literal["Gemini 3.1 Flash Lite", "Gemini 3.7 Flash"] | None
     status: AgentRunStatus
@@ -95,3 +96,59 @@ class AgentRunHistoryDetailData(AgentRunHistorySummaryData):
     plan_versions: tuple[AgentPlanVersionData, ...] = Field(max_length=2)
     steps: tuple[AgentStepData, ...] = Field(max_length=4)
     timeline: tuple[AgentTimelineEventData, ...] = Field(max_length=20)
+
+
+class RemainingApprovalBudgetData(BaseModel):
+    steps: int = Field(ge=0, le=4)
+    tools: int = Field(ge=0, le=4)
+
+
+class ApprovalStateData(BaseModel):
+    approval_id: UUID
+    run_id: UUID
+    status: Literal[
+        "PENDING", "APPROVED", "REJECTED", "SUPERSEDED", "EXPIRED", "CANCELLED", "CONSUMED"
+    ]
+    action_label: Annotated[str, Field(min_length=1, max_length=80)]
+    safe_explanation: Annotated[str, Field(min_length=1, max_length=180)]
+    tool_name: SafeToolName
+    risk_level: ApprovalRiskClass
+    resource_type: Literal["authorized portfolio documents", "authorized financial data"]
+    estimated_cost_class: Literal["low", "standard"]
+    safe_scope_summary: Annotated[str, Field(min_length=1, max_length=160)]
+    remaining_budget: RemainingApprovalBudgetData
+    expires_at: datetime
+
+
+class AwaitingApprovalData(BaseModel):
+    outcome: Literal["awaiting_approval"] = "awaiting_approval"
+    conversation_id: UUID
+    user_message_id: UUID
+    agent_session_id: UUID
+    agent_control_mode: AgentControlMode
+    approval: ApprovalStateData
+
+
+class SafelyTerminatedData(BaseModel):
+    outcome: Literal["terminated"] = "terminated"
+    run_id: UUID
+    status: Literal["REJECTED", "CANCELLED", "FAILED", "EXPIRED"]
+    safe_message: Annotated[str, Field(min_length=1, max_length=180)]
+
+
+class ResolveApprovalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    action: Literal["approve_once", "reject"]
+
+
+class ChangeAgentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    content: Annotated[str, Field(min_length=1, max_length=1000)]
+
+    @field_validator("content")
+    @classmethod
+    def normalize_content(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized:
+            raise ValueError("Change request must not be blank")
+        return normalized

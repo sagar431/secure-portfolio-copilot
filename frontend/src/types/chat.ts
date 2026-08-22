@@ -29,6 +29,12 @@ export interface SendConversationMessageRequest {
   response_mode: ResponseMode
 }
 
+export type AgentControlMode = 'guided' | 'balanced' | 'autonomous'
+
+export interface RunAgentRequest extends SendConversationMessageRequest {
+  agent_control_mode: AgentControlMode
+}
+
 export type GroundedAnswerStatus = 'grounded' | 'insufficient_evidence'
 export type SafeModelName = 'Gemini 3.1 Flash Lite' | 'Gemini 3.7 Flash'
 export type ResponseMode = 'fast' | 'auto' | 'deep'
@@ -150,6 +156,55 @@ export interface AgentRunData {
   requested_response_mode: ResponseMode
   resolved_response_mode: ResponseMode | null
 }
+
+export type ApprovalStatus =
+  | 'PENDING'
+  | 'APPROVED'
+  | 'REJECTED'
+  | 'SUPERSEDED'
+  | 'EXPIRED'
+  | 'CANCELLED'
+  | 'CONSUMED'
+
+export interface AgentApprovalState {
+  approval_id: string
+  run_id: string
+  status: ApprovalStatus
+  action_label: string
+  safe_explanation: string
+  tool_name: string
+  risk_level:
+    | 'LOW_READ_ONLY'
+    | 'SENSITIVE'
+    | 'EXPENSIVE'
+    | 'STATE_CHANGING'
+    | 'BUDGET_EXPANDING'
+    | 'ALWAYS_REQUIRE_APPROVAL'
+  resource_type: 'authorized portfolio documents' | 'authorized financial data'
+  estimated_cost_class: 'low' | 'standard'
+  safe_scope_summary: string
+  remaining_budget: { steps: number; tools: number }
+  expires_at: string
+}
+
+export interface AwaitingAgentApprovalData {
+  outcome: 'awaiting_approval'
+  conversation_id: string
+  user_message_id: string
+  agent_session_id: string
+  agent_control_mode: AgentControlMode
+  approval: AgentApprovalState
+}
+
+export interface SafelyTerminatedAgentData {
+  outcome: 'terminated'
+  run_id: string
+  status: 'REJECTED' | 'CANCELLED' | 'FAILED' | 'EXPIRED'
+  safe_message: string
+}
+
+export type AgentRunResponse =
+  AgentRunData | AwaitingAgentApprovalData | SafelyTerminatedAgentData
 
 export interface GroundedChatTurn {
   kind: 'grounded'

@@ -322,6 +322,7 @@ class SafeStepSnapshot(StrictModel):
     plan_step_index: int = Field(ge=0, le=2)
     action_name: Literal["TOOL_CALL"] = "TOOL_CALL"
     tool_name: str = Field(pattern=r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
+    action_argument_hash: str = Field(default="0" * 64, pattern=r"^[0-9a-f]{64}$")
     status: Literal["COMPLETED", "DENIED", "TIMEOUT", "FAILED"]
     policy_decision: Literal["ALLOWED", "DENIED"]
     reason_code: str = Field(pattern=r"^[A-Z][A-Z0-9_]{1,95}$")

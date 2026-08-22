@@ -1779,6 +1779,57 @@ td {
   line-height: 1.5;
 }
 
+.approval-card {
+  margin-top: 1rem;
+  padding: 1.25rem;
+  border: 1px solid var(--color-border, #c7d2df);
+  border-left: 0.3rem solid #8a5a13;
+  border-radius: 0.75rem;
+  background: #fffaf0;
+}
+
+.approval-card > header,
+.approval-card__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.approval-card dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: 0.75rem;
+}
+
+.approval-card dl > div {
+  min-width: 0;
+}
+
+.approval-card dt {
+  color: var(--color-muted, #52606d);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.approval-card dd {
+  margin: 0.2rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.approval-card__change {
+  display: grid;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+
+.approval-card__actions {
+  justify-content: flex-start;
+  margin-top: 1rem;
+}
+
 .evidence-drawer {
   position: fixed;
   z-index: 20;

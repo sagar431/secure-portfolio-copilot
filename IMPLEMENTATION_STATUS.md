@@ -218,9 +218,9 @@ explicit `NO_MODEL_CALL` sentinel instead of a configured-but-unused model name.
   context. It does not yet provide model-proposed memory candidates, MCP memory tools, automatic
   transcript memory, or a correction workflow.
 
-- Agent history is metadata-only and owner-scoped. It does not yet include retention/deletion/export,
-  human approval actions, pause/resume execution, or recovery of a process interrupted outside a
-  handled request cancellation. `AWAITING_APPROVAL` is a prepared state only.
+- Agent history and human-approval metadata are metadata-only and owner-scoped. Approval and safe
+  resume are implemented; retention/deletion/export and automatic recovery after a consumed
+  approval is interrupted remain out of scope.
 - The conversation list is persisted, and message rows are stored, but Step 6 has no message-history
   read endpoint and sends no prior turns to the model. Scoped memory is explicit and separate; it
   does not restore earlier transcript turns after reload.
@@ -293,7 +293,7 @@ persisted browser preference. Changes remain local and uncommitted on `codex/res
   `agent_steps`, and authorization-validated `agent_observation_records` with bounded constraints.
 - The host state machine supports CREATED, RUNNING, AWAITING_APPROVAL, COMPLETED, REFUSED,
   CLARIFICATION_REQUIRED, INSUFFICIENT_EVIDENCE, LIMIT_REACHED, FAILED, and CANCELLED. Terminal
-  states cannot transition; AWAITING_APPROVAL has persistence semantics only.
+  states cannot transition; AWAITING_APPROVAL is a durable, resolvable pause state.
 - Run creation follows owned-conversation and capability checks and follows Fast-mode preflight.
   Safe initial state is committed before model/tool execution; failures and cancellation update a
   terminal record without persisting partial plan/step/observation rows.
@@ -310,3 +310,23 @@ persisted browser preference. Changes remain local and uncommitted on `codex/res
   authenticated browser persistence/reload acceptance.
 
 Implementation remains local, uncommitted, and unpushed on `codex/persistent-agent-runs`.
+
+## Human approval controls — implemented locally
+
+- Alembic `20260822_0011` adds content-free, single-use approval rows, independent
+  Guided/Balanced/Autonomous control mode, initial-message reconstruction references, and canonical
+  action hashes for stored steps.
+- Guided pauses before every tool. Balanced automatically runs the five current low-risk read-only
+  retrieval/calculator tools. Autonomous uses the same allowlist and fixed budgets;
+  `ALWAYS_REQUIRE_APPROVAL` remains mandatory for future tools.
+- Approve once, Reject, Stop, and Change request are owner-scoped typed APIs. Resolution reloads
+  current identity and grants, locks rows, verifies status/expiry/plan/step/tool/scope/action binding,
+  and prevents replay and concurrent double execution.
+- Resume keeps the same run ID and reconstructs authorized prior observations from immutable IDs.
+  Any action-hash or history mismatch fails closed. Reject makes zero tool calls, Stop records
+  CANCELLED, and Change request preserves the cancelled old history while creating a new run.
+- The accessible React approval card renders safe metadata only and disables all resolution controls
+  in flight or after expiry. Agent History displays both control mode and persisted pause/final state.
+
+Implementation remains local, uncommitted, unstaged, and unpushed on
+`codex/human-approval-controls`.

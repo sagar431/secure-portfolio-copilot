@@ -1,9 +1,11 @@
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import TypeVar
 from uuid import UUID, uuid4
 
+from app.agent.approval_security import canonical_action_hash, classify_tool_risk
 from app.agent.contracts import (
     AgentModelError,
     ApprovedToolGateway,
@@ -33,6 +35,7 @@ from app.calculations.contracts import CalculationMetric, CalculationResult
 from app.chat.contracts import GroundedEvidence, GroundedGenerationRequest, LLMProviderError
 from app.chat.service import GroundingValidationError, validate_grounded_answer
 from app.mcp_gateway.contracts import PermittedToolDescriptor
+from app.models.agent_runs import AgentControlMode, ApprovalRiskClass
 from app.policies.models import AuthorizationContext
 from app.schemas.chat import (
     CalculationData,
@@ -56,6 +59,40 @@ _CALCULATOR_TOOLS = frozenset(
     }
 )
 _TRACE_SAFE_TOOL_NAMES = frozenset({_SEARCH_TOOL, _EXCERPT_TOOL, *_CALCULATOR_TOOLS})
+
+
+@dataclass(frozen=True, slots=True)
+class ApprovalRequired(Exception):
+    action: object
+    action_hash: str
+    plan_version: int
+    proposed_step_number: int
+    plans: tuple[object, ...]
+    step_count: int
+    remaining_tools: int
+    risk_class: ApprovalRiskClass
+    safe_steps: tuple[SafeStepSnapshot, ...]
+    safe_observations: tuple[SafeObservationSnapshot, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ReconstructedStep:
+    action_hash: str
+    observation: StructuredObservation
+
+
+class ApprovalReconstructionMismatch(Exception):
+    pass
+
+
+def _must_pause(
+    mode: AgentControlMode, risk: ApprovalRiskClass, action_hash: str, approved_hash: str | None
+) -> bool:
+    if approved_hash == action_hash:
+        return False
+    if risk is ApprovalRiskClass.ALWAYS_REQUIRE_APPROVAL:
+        return True
+    return mode is AgentControlMode.GUIDED
 
 
 class AgentLoop:
@@ -114,6 +151,9 @@ class AgentLoop:
         permitted_tool_catalog: tuple[PermittedToolDescriptor, ...],
         request_id: str,
         agent_run_id: UUID | None = None,
+        agent_control_mode: AgentControlMode = AgentControlMode.BALANCED,
+        approved_action_hash: str | None = None,
+        reconstructed_steps: tuple[ReconstructedStep, ...] = (),
     ) -> AgentRunOutcome:
         started = self._clock()
         session = AgentSession(
@@ -130,6 +170,11 @@ class AgentLoop:
         evidence_by_id: dict[str, GroundedEvidence] = {}
         step_count = replan_count = retry_count = 0
         retrieval_count = 0
+        reconstructed_index = 0
+        if reconstructed_steps:
+            self._gateway.set_evidence_sequence(
+                sum(len(item.observation.evidence) for item in reconstructed_steps)
+            )
 
         try:
             perception = await self._within_budget(
@@ -340,87 +385,116 @@ class AgentLoop:
 
             assert action.action_name is not None
             tool_name = action.action_name
+            risk_class = classify_tool_risk(tool_name)
+            action_hash = canonical_action_hash(action)
             tool_started = self._clock()
-            try:
-                observation = await self._within_budget(
-                    self._gateway.execute(
+            if reconstructed_index < len(reconstructed_steps):
+                reconstructed = reconstructed_steps[reconstructed_index]
+                if reconstructed.action_hash != action_hash:
+                    raise ApprovalReconstructionMismatch
+                observation = reconstructed.observation
+                reconstructed_index += 1
+            else:
+                if approved_action_hash is not None and approved_action_hash != action_hash:
+                    raise ApprovalReconstructionMismatch
+                if _must_pause(agent_control_mode, risk_class, action_hash, approved_action_hash):
+                    raise ApprovalRequired(
                         action=action,
-                        authorization_context=authorization_context,
-                        permitted_tools=permitted_tools,
-                        request_id=request_id,
-                    ),
-                    started=started,
-                )
-            except TimeoutError:
-                tool_duration_ms = max(0, int((self._clock() - tool_started) * 1000))
-                session = session.model_copy(
-                    update={
-                        "safe_steps": session.safe_steps
-                        + (
-                            SafeStepSnapshot(
-                                plan_version=plan_state.current_plan.version,
-                                plan_step_index=active_plan_step.step_index,
-                                tool_name=tool_name,
-                                status="TIMEOUT",
-                                policy_decision="ALLOWED",
-                                reason_code="TOOL_TIMEOUT",
-                                duration_ms=tool_duration_ms,
-                            ),
-                        )
-                    }
-                )
-                trace.append(
-                    self._event(
-                        TraceEventType.TOOL,
-                        TraceStatus.TIMEOUT,
-                        "TOOL_TIMEOUT",
-                        action_name=action.action_name,
+                        action_hash=action_hash,
+                        plan_version=plan_state.current_plan.version,
+                        proposed_step_number=step_count + 1,
+                        plans=tuple(plan_state.versions),
+                        step_count=step_count,
+                        remaining_tools=max(0, self._limits.max_steps - step_count),
+                        risk_class=risk_class,
+                        safe_steps=session.safe_steps,
+                        safe_observations=session.safe_observations,
                     )
-                )
-                return self._terminal(
-                    session,
-                    TerminalStatus.FAILED,
-                    StoppingReason.TOOL_TIMEOUT,
-                    trace,
-                    step_count,
-                    replan_count,
-                    retry_count,
-                )
-            except Exception:
-                tool_duration_ms = max(0, int((self._clock() - tool_started) * 1000))
-                session = session.model_copy(
-                    update={
-                        "safe_steps": session.safe_steps
-                        + (
-                            SafeStepSnapshot(
-                                plan_version=plan_state.current_plan.version,
-                                plan_step_index=active_plan_step.step_index,
-                                tool_name=tool_name,
-                                status="FAILED",
-                                policy_decision="ALLOWED",
-                                reason_code="TOOL_ERROR",
-                                duration_ms=tool_duration_ms,
-                            ),
-                        )
-                    }
-                )
-                trace.append(
-                    self._event(
-                        TraceEventType.TOOL,
-                        TraceStatus.FAILED,
-                        "TOOL_ERROR",
-                        action_name=action.action_name,
+                # An approval is for exactly one action, not a blanket continuation.
+                if approved_action_hash == action_hash:
+                    approved_action_hash = None
+                try:
+                    observation = await self._within_budget(
+                        self._gateway.execute(
+                            action=action,
+                            authorization_context=authorization_context,
+                            permitted_tools=permitted_tools,
+                            request_id=request_id,
+                        ),
+                        started=started,
                     )
-                )
-                return self._terminal(
-                    session,
-                    TerminalStatus.FAILED,
-                    StoppingReason.TOOL_ERROR,
-                    trace,
-                    step_count,
-                    replan_count,
-                    retry_count,
-                )
+                except TimeoutError:
+                    tool_duration_ms = max(0, int((self._clock() - tool_started) * 1000))
+                    session = session.model_copy(
+                        update={
+                            "safe_steps": session.safe_steps
+                            + (
+                                SafeStepSnapshot(
+                                    plan_version=plan_state.current_plan.version,
+                                    plan_step_index=active_plan_step.step_index,
+                                    tool_name=tool_name,
+                                    action_argument_hash=action_hash,
+                                    status="TIMEOUT",
+                                    policy_decision="ALLOWED",
+                                    reason_code="TOOL_TIMEOUT",
+                                    duration_ms=tool_duration_ms,
+                                ),
+                            )
+                        }
+                    )
+                    trace.append(
+                        self._event(
+                            TraceEventType.TOOL,
+                            TraceStatus.TIMEOUT,
+                            "TOOL_TIMEOUT",
+                            action_name=action.action_name,
+                        )
+                    )
+                    return self._terminal(
+                        session,
+                        TerminalStatus.FAILED,
+                        StoppingReason.TOOL_TIMEOUT,
+                        trace,
+                        step_count,
+                        replan_count,
+                        retry_count,
+                    )
+                except Exception:
+                    tool_duration_ms = max(0, int((self._clock() - tool_started) * 1000))
+                    session = session.model_copy(
+                        update={
+                            "safe_steps": session.safe_steps
+                            + (
+                                SafeStepSnapshot(
+                                    plan_version=plan_state.current_plan.version,
+                                    plan_step_index=active_plan_step.step_index,
+                                    tool_name=tool_name,
+                                    action_argument_hash=action_hash,
+                                    status="FAILED",
+                                    policy_decision="ALLOWED",
+                                    reason_code="TOOL_ERROR",
+                                    duration_ms=tool_duration_ms,
+                                ),
+                            )
+                        }
+                    )
+                    trace.append(
+                        self._event(
+                            TraceEventType.TOOL,
+                            TraceStatus.FAILED,
+                            "TOOL_ERROR",
+                            action_name=action.action_name,
+                        )
+                    )
+                    return self._terminal(
+                        session,
+                        TerminalStatus.FAILED,
+                        StoppingReason.TOOL_ERROR,
+                        trace,
+                        step_count,
+                        replan_count,
+                        retry_count,
+                    )
 
             step_count += 1
             if action.action_name == _SEARCH_TOOL:
@@ -432,6 +506,7 @@ class AgentLoop:
                 plan_version=plan_state.current_plan.version,
                 plan_step_index=active_plan_step.step_index,
                 tool_name=tool_name,
+                action_argument_hash=action_hash,
                 status=(
                     "COMPLETED"
                     if observation.status == ObservationStatus.SUCCESS

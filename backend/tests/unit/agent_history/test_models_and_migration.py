@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import Table
 
 from app.models.agent_runs import (
+    AgentApprovalRequest,
     AgentObservationRecord,
     AgentPlanVersion,
     AgentRun,
@@ -35,6 +36,7 @@ def test_persistence_models_have_only_metadata_columns_and_named_constraints() -
         AgentPlanVersion.__table__,
         AgentStep.__table__,
         AgentObservationRecord.__table__,
+        AgentApprovalRequest.__table__,
     )
     all_columns = {column.name for table in tables for column in table.columns}
 
@@ -44,6 +46,7 @@ def test_persistence_models_have_only_metadata_columns_and_named_constraints() -
         "agent_plan_versions",
         "agent_steps",
         "agent_observation_records",
+        "agent_approval_requests",
     }
     constraint_names = {
         constraint.name for table in tables for constraint in table.constraints if constraint.name
@@ -52,6 +55,18 @@ def test_persistence_models_have_only_metadata_columns_and_named_constraints() -
     assert "uq_agent_plan_versions_run_version" in constraint_names
     assert "uq_agent_steps_run_step" in constraint_names
     assert "uq_agent_observations_run_step" in constraint_names
+    assert "ck_agent_approvals_action_hash" in constraint_names
+
+
+def test_approval_migration_follows_persistent_runs_and_is_reversible() -> None:
+    path = Path(__file__).parents[3] / "alembic/versions/20260822_0011_agent_approvals.py"
+    source = path.read_text(encoding="utf-8")
+    assert 'down_revision: str | None = "20260822_0010"' in source
+    assert '"agent_approval_requests"' in source
+    assert 'op.drop_table("agent_approval_requests")' in source
+    assert "uq_agent_approvals_one_pending_per_run" in source
+    for forbidden in FORBIDDEN_COLUMNS:
+        assert f'sa.Column("{forbidden}"' not in source
 
 
 class _OperationRecorder:

@@ -1,6 +1,11 @@
 import type { ApiSuccessEnvelope } from '../types/api'
 import type {
   AgentRunData,
+  AgentRunResponse,
+  AgentApprovalState,
+  AgentControlMode,
+  AwaitingAgentApprovalData,
+  SafelyTerminatedAgentData,
   AgentTraceEventData,
   CalculationData,
   CalculationInputData,
@@ -645,6 +650,112 @@ function isAgentRunData(value: unknown): value is AgentRunData {
   )
 }
 
+const CONTROL_MODES = new Set(['guided', 'balanced', 'autonomous'])
+const APPROVAL_STATUSES = new Set([
+  'PENDING',
+  'APPROVED',
+  'REJECTED',
+  'SUPERSEDED',
+  'EXPIRED',
+  'CANCELLED',
+  'CONSUMED',
+])
+const APPROVAL_RISKS = new Set([
+  'LOW_READ_ONLY',
+  'SENSITIVE',
+  'EXPENSIVE',
+  'STATE_CHANGING',
+  'BUDGET_EXPANDING',
+  'ALWAYS_REQUIRE_APPROVAL',
+])
+
+function isApprovalState(value: unknown): value is AgentApprovalState {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, [
+      'approval_id',
+      'run_id',
+      'status',
+      'action_label',
+      'safe_explanation',
+      'tool_name',
+      'risk_level',
+      'resource_type',
+      'estimated_cost_class',
+      'safe_scope_summary',
+      'remaining_budget',
+      'expires_at',
+    ]) &&
+    isUuid(value.approval_id) &&
+    isUuid(value.run_id) &&
+    typeof value.status === 'string' &&
+    APPROVAL_STATUSES.has(value.status) &&
+    isBoundedString(value.action_label, 80) &&
+    isBoundedString(value.safe_explanation, 180) &&
+    typeof value.tool_name === 'string' &&
+    APPROVED_AGENT_ACTION_NAMES.has(value.tool_name) &&
+    typeof value.risk_level === 'string' &&
+    APPROVAL_RISKS.has(value.risk_level) &&
+    (value.resource_type === 'authorized portfolio documents' ||
+      value.resource_type === 'authorized financial data') &&
+    (value.estimated_cost_class === 'low' ||
+      value.estimated_cost_class === 'standard') &&
+    isBoundedString(value.safe_scope_summary, 160) &&
+    isRecord(value.remaining_budget) &&
+    hasOnlyKeys(value.remaining_budget, ['steps', 'tools']) &&
+    isSafeCounter(value.remaining_budget.steps) &&
+    isSafeCounter(value.remaining_budget.tools) &&
+    isTimestamp(value.expires_at)
+  )
+}
+
+function isAwaitingApproval(
+  value: unknown,
+): value is AwaitingAgentApprovalData {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, [
+      'outcome',
+      'conversation_id',
+      'user_message_id',
+      'agent_session_id',
+      'agent_control_mode',
+      'approval',
+    ]) &&
+    value.outcome === 'awaiting_approval' &&
+    isUuid(value.conversation_id) &&
+    isUuid(value.user_message_id) &&
+    isUuid(value.agent_session_id) &&
+    typeof value.agent_control_mode === 'string' &&
+    CONTROL_MODES.has(value.agent_control_mode) &&
+    isApprovalState(value.approval) &&
+    value.approval.run_id === value.agent_session_id
+  )
+}
+
+function isSafelyTerminated(
+  value: unknown,
+): value is SafelyTerminatedAgentData {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ['outcome', 'run_id', 'status', 'safe_message']) &&
+    value.outcome === 'terminated' &&
+    isUuid(value.run_id) &&
+    ['REJECTED', 'CANCELLED', 'FAILED', 'EXPIRED'].includes(
+      String(value.status),
+    ) &&
+    isBoundedString(value.safe_message, 180)
+  )
+}
+
+function isAgentRunResponse(value: unknown): value is AgentRunResponse {
+  return (
+    isAgentRunData(value) ||
+    isAwaitingApproval(value) ||
+    isSafelyTerminated(value)
+  )
+}
+
 function invalidResponse(requestId: string | null) {
   return new ApiError(
     'Backend returned an invalid response.',
@@ -764,7 +875,8 @@ export async function runConversationAgent(
   content: string,
   signal?: AbortSignal,
   responseMode: ResponseMode = 'auto',
-): Promise<ApiSuccessEnvelope<AgentRunData>> {
+  agentControlMode: AgentControlMode = 'balanced',
+): Promise<ApiSuccessEnvelope<AgentRunData | AwaitingAgentApprovalData>> {
   if (!isUuid(conversationId)) {
     throw new ApiError(
       'Select a valid conversation.',
@@ -778,15 +890,75 @@ export async function runConversationAgent(
     {
       method: 'POST',
       token,
-      body: validateMessage(content, responseMode),
+      body: {
+        ...validateMessage(content, responseMode),
+        agent_control_mode: agentControlMode,
+      },
       signal,
     },
   )
-  if (!isExactEnvelope(response, isAgentRunData)) {
+  if (
+    !isExactEnvelope(
+      response,
+      (value): value is AgentRunData | AwaitingAgentApprovalData =>
+        isAgentRunData(value) || isAwaitingApproval(value),
+    )
+  ) {
     throw invalidResponse(response.request_id ?? null)
   }
   if (response.data.conversation_id !== conversationId) {
     throw invalidResponse(response.request_id)
+  }
+  return response
+}
+
+const APPROVAL_BASE = '/api/agent-runs'
+
+export async function resolveAgentApproval(
+  token: string,
+  runId: string,
+  approvalId: string,
+  action: 'approve_once' | 'reject',
+): Promise<ApiSuccessEnvelope<AgentRunResponse>> {
+  const response = await requestJson<unknown>(
+    `${APPROVAL_BASE}/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/resolve`,
+    { method: 'POST', token, body: { action } },
+  )
+  if (!isExactEnvelope(response, isAgentRunResponse)) {
+    throw invalidResponse(response.request_id ?? null)
+  }
+  return response
+}
+
+export async function stopAgentRun(token: string, runId: string) {
+  const response = await requestJson<unknown>(
+    `${APPROVAL_BASE}/${encodeURIComponent(runId)}/stop`,
+    { method: 'POST', token },
+  )
+  if (!isExactEnvelope(response, isSafelyTerminated)) {
+    throw invalidResponse(response.request_id ?? null)
+  }
+  return response
+}
+
+export async function changeAgentRequest(
+  token: string,
+  runId: string,
+  approvalId: string,
+  content: string,
+): Promise<ApiSuccessEnvelope<AgentRunData | AwaitingAgentApprovalData>> {
+  const response = await requestJson<unknown>(
+    `${APPROVAL_BASE}/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}/change-request`,
+    { method: 'POST', token, body: { content: content.trim() } },
+  )
+  if (
+    !isExactEnvelope(
+      response,
+      (value): value is AgentRunData | AwaitingAgentApprovalData =>
+        isAgentRunData(value) || isAwaitingApproval(value),
+    )
+  ) {
+    throw invalidResponse(response.request_id ?? null)
   }
   return response
 }

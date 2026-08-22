@@ -50,6 +50,7 @@ function isSummary(value: unknown): value is AgentRunHistorySummary {
       'id',
       'conversation_id',
       'response_mode',
+      'agent_control_mode',
       'selected_model_tier',
       'selected_model_name',
       'status',
@@ -69,6 +70,9 @@ function isSummary(value: unknown): value is AgentRunHistorySummary {
     typeof value.conversation_id === 'string' &&
     UUID.test(value.conversation_id) &&
     ['fast', 'auto', 'deep'].includes(String(value.response_mode)) &&
+    ['guided', 'balanced', 'autonomous'].includes(
+      String(value.agent_control_mode),
+    ) &&
     (value.selected_model_tier === null ||
       value.selected_model_tier === 'fast' ||
       value.selected_model_tier === 'deep') &&

@@ -24,6 +24,11 @@ class AgentGatewayAdapter:
         self._gateway = gateway
         self._evidence_sequence = 0
 
+    def set_evidence_sequence(self, value: int) -> None:
+        if value < self._evidence_sequence or value > 32:
+            raise ValueError("Invalid reconstructed evidence sequence")
+        self._evidence_sequence = value
+
     def _evidence(self, item: ToolEvidence) -> GroundedEvidence:
         self._evidence_sequence += 1
         return GroundedEvidence(

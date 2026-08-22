@@ -120,6 +120,9 @@ class DeterministicFakeGateway:
         self._observations = deque(observations)
         self.calls: list[tuple[str, AuthorizationContext, frozenset[str], str]] = []
 
+    def set_evidence_sequence(self, value: int) -> None:
+        del value
+
     async def execute(
         self,
         *,

@@ -528,8 +528,9 @@ Every bounded agent request that passes conversation ownership and `QUERY_DOCUME
 receives a metadata-only `agent_runs` record. Fast requests that require Deep mode still stop before
 run creation. The lifecycle is host-owned: `CREATED` → `RUNNING` may finish as `COMPLETED`,
 `REFUSED`, `CLARIFICATION_REQUIRED`, `INSUFFICIENT_EVIDENCE`, `LIMIT_REACHED`, `FAILED`, or
-`CANCELLED`. `AWAITING_APPROVAL` exists only as a prepared persistence state; this milestone adds no
-approval buttons or resume behavior.
+`CANCELLED`. `AWAITING_APPROVAL` is a durable pause: Guided runs pause before each tool, while
+Balanced and Autonomous runs may execute the existing authorized low-risk read-only tools within
+fixed host budgets. Fast/Auto/Deep remains an independent model-cost and capability choice.
 
 Immutable `agent_plan_versions`, strictly ordered `agent_steps`, and authorization-validated
 `agent_observation_records` retain only bounded status metadata, approved tool names, safe reason
@@ -542,3 +543,23 @@ owner-scoped `GET /api/agent-runs/{run_id}`. The backend derives tenant and user
 current authenticated database context; foreign and unknown IDs return the same generic 404. The
 detail view reconstructs a safe Perception → Policy → Decision → Tool → Observation → Final
 timeline and renders all strings as inert React text.
+
+## Human approval controls
+
+Approval records intent; it never grants authority. Every resolution request reloads the current
+database identity and scope, locks the owner-scoped run and approval row, checks expiry and the full
+scope fingerprint, and consumes one approval before execution. The reconstructed action must match
+the approved canonical action hash. Foreign IDs, replay, drift, expiry, and concurrent clicks fail
+closed without widening policy, tool allowlists, tenant isolation, or budgets.
+
+Migration `20260822_0011` adds content-free `agent_approval_requests`, the independent agent-control
+mode, the immutable initial-message reference used for reconstruction, and action hashes for stored
+steps. Approval rows contain only identifiers, immutable plan/step coordinates, approved names,
+hashes, categorical risk/reason/status, expiry, resolver identity, and timestamps. They exclude raw
+arguments, question copies, prompts, reasoning, provider bodies, document or memory content, scope
+objects, secrets, tokens, paths, and stack traces.
+
+The approval card supports **Approve once**, **Reject**, **Change request**, and **Stop run**. Reject
+performs no tool call; Stop records `CANCELLED`; Change request supersedes and cancels the old run and
+starts a new bounded run without rewriting its immutable history. The host-owned locked database row
+is the single-use approval mechanism; the browser receives no bearer approval token.

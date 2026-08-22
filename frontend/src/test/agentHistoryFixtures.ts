@@ -7,6 +7,7 @@ export const agentHistorySummary: AgentRunHistorySummary = {
   id: 'f84cf7c6-4f21-4cf8-a0d9-bef1259e9001',
   conversation_id: '4fa6db52-dd57-44ac-ae46-a20c5ef62772',
   response_mode: 'deep',
+  agent_control_mode: 'balanced',
   selected_model_tier: 'deep',
   selected_model_name: 'Gemini 3.7 Flash',
   status: 'COMPLETED',

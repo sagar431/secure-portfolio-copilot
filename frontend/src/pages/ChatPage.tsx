@@ -3,17 +3,23 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { ApiError } from '../api/client'
 import {
   createConversation,
+  changeAgentRequest,
   listConversations,
+  resolveAgentApproval,
   runConversationAgent,
   sendConversationMessage,
+  stopAgentRun,
 } from '../api/chat'
 import { useAuth } from '../auth/useAuth'
 import { AgentTraceTimeline } from '../components/AgentTraceTimeline'
+import { AgentApprovalCard } from '../components/AgentApprovalCard'
 import { CalculationCard } from '../components/CalculationCard'
 import { EvidenceDrawer } from '../components/EvidenceDrawer'
 import { GroundedAnswer } from '../components/GroundedAnswer'
 import type {
   AgentRunData,
+  AgentControlMode,
+  AwaitingAgentApprovalData,
   ChatTurn,
   ConversationData,
   GroundedAnswerData,
@@ -62,6 +68,25 @@ interface UpgradeRequest {
 
 function safeError(error: unknown): SafeError {
   if (error instanceof ApiError) {
+    if (error.code === 'approval_expired') {
+      return {
+        kind: 'generic',
+        message: 'This approval expired. The action was not executed.',
+        requestId: error.requestId,
+      }
+    }
+    if (
+      error.code === 'approval_unavailable' ||
+      error.code === 'approval_mismatch' ||
+      error.code === 'authorization_changed'
+    ) {
+      return {
+        kind: 'denied',
+        message:
+          'The pending action could not be resumed safely and was not executed.',
+        requestId: error.requestId,
+      }
+    }
     if (TIMEOUT_CODES.has(error.code)) {
       return {
         kind: 'timeout',
@@ -150,6 +175,14 @@ export function ChatPage() {
   >({})
   const [question, setQuestion] = useState('')
   const [responseMode, setResponseMode] = useState<ResponseMode>('auto')
+  const [agentControlMode, setAgentControlMode] =
+    useState<AgentControlMode>('balanced')
+  const [pendingApproval, setPendingApproval] = useState<{
+    data: AwaitingAgentApprovalData
+    question: string
+  } | null>(null)
+  const [approvalResolving, setApprovalResolving] = useState(false)
+  const [approvalStatus, setApprovalStatus] = useState<string | null>(null)
   const [loadingList, setLoadingList] = useState(true)
   const [creating, setCreating] = useState(false)
   const [sending, setSending] = useState(false)
@@ -278,39 +311,50 @@ export function ChatPage() {
         )
       }
       const targetConversationId = conversationId
-      const turn: ChatTurn =
-        submissionMode === 'agent'
-          ? await runConversationAgent(
-              auth.accessToken,
-              targetConversationId,
-              content,
-              controller.signal,
-              responseMode,
-            ).then((response) => ({
-              kind: 'agent' as const,
-              id: response.data.assistant_message_id,
-              question: content,
-              response: response.data,
-            }))
-          : await sendConversationMessage(
-              auth.accessToken,
-              targetConversationId,
-              content,
-              controller.signal,
-              responseMode,
-            ).then((response) => ({
-              kind: 'grounded' as const,
-              id: response.data.assistant_message_id,
-              question: content,
-              response: response.data,
-            }))
-      setTurnsByConversation((current) => ({
-        ...current,
-        [targetConversationId]: [
-          ...(current[targetConversationId] ?? []),
-          turn,
-        ],
-      }))
+      let turn: ChatTurn | null = null
+      if (submissionMode === 'agent') {
+        const response = await runConversationAgent(
+          auth.accessToken,
+          targetConversationId,
+          content,
+          controller.signal,
+          responseMode,
+          agentControlMode,
+        )
+        if ('outcome' in response.data) {
+          setPendingApproval({ data: response.data, question: content })
+          setApprovalStatus(null)
+        } else {
+          turn = {
+            kind: 'agent',
+            id: response.data.assistant_message_id,
+            question: content,
+            response: response.data,
+          }
+        }
+      } else {
+        turn = await sendConversationMessage(
+          auth.accessToken,
+          targetConversationId,
+          content,
+          controller.signal,
+          responseMode,
+        ).then((response) => ({
+          kind: 'grounded' as const,
+          id: response.data.assistant_message_id,
+          question: content,
+          response: response.data,
+        }))
+      }
+      if (turn) {
+        setTurnsByConversation((current) => ({
+          ...current,
+          [targetConversationId]: [
+            ...(current[targetConversationId] ?? []),
+            turn,
+          ],
+        }))
+      }
       setQuestion('')
     } catch (requestError) {
       if (
@@ -342,6 +386,117 @@ export function ChatPage() {
     activeRequest.current?.abort()
   }
 
+  async function resolvePending(action: 'approve_once' | 'reject') {
+    if (!pendingApproval || !auth.accessToken || approvalResolving) return
+    setApprovalResolving(true)
+    setError(null)
+    try {
+      const response = await resolveAgentApproval(
+        auth.accessToken,
+        pendingApproval.data.agent_session_id,
+        pendingApproval.data.approval.approval_id,
+        action,
+      )
+      if ('terminal_status' in response.data) {
+        const completed = response.data
+        setTurnsByConversation((current) => ({
+          ...current,
+          [completed.conversation_id]: [
+            ...(current[completed.conversation_id] ?? []),
+            {
+              kind: 'agent',
+              id: completed.assistant_message_id,
+              question: pendingApproval.question,
+              response: completed,
+            },
+          ],
+        }))
+        setPendingApproval(null)
+        setApprovalStatus('Run completed after one approved action.')
+      } else if (response.data.outcome === 'awaiting_approval') {
+        setPendingApproval({
+          data: response.data,
+          question: pendingApproval.question,
+        })
+        setApprovalStatus(
+          'Approved action completed. The next action needs approval.',
+        )
+      } else {
+        setPendingApproval(null)
+        setApprovalStatus(response.data.safe_message)
+      }
+    } catch (reason) {
+      if (
+        reason instanceof ApiError &&
+        (reason.code === 'approval_expired' ||
+          reason.code === 'approval_unavailable' ||
+          reason.code === 'approval_mismatch' ||
+          reason.code === 'authorization_changed')
+      ) {
+        setPendingApproval(null)
+      }
+      setError(safeError(reason))
+    } finally {
+      setApprovalResolving(false)
+    }
+  }
+
+  async function stopPending() {
+    if (!pendingApproval || !auth.accessToken || approvalResolving) return
+    setApprovalResolving(true)
+    try {
+      const response = await stopAgentRun(
+        auth.accessToken,
+        pendingApproval.data.agent_session_id,
+      )
+      setApprovalStatus(response.data.safe_message)
+      setPendingApproval(null)
+    } catch (reason) {
+      setError(safeError(reason))
+    } finally {
+      setApprovalResolving(false)
+    }
+  }
+
+  async function submitChange(content: string) {
+    if (!pendingApproval || !auth.accessToken || approvalResolving) return
+    setApprovalResolving(true)
+    try {
+      const response = await changeAgentRequest(
+        auth.accessToken,
+        pendingApproval.data.agent_session_id,
+        pendingApproval.data.approval.approval_id,
+        content,
+      )
+      if ('outcome' in response.data) {
+        setPendingApproval({ data: response.data, question: content.trim() })
+        setApprovalStatus(
+          'The old run was cancelled and a new bounded plan was created.',
+        )
+      } else {
+        const completed = response.data
+        setTurnsByConversation((current) => ({
+          ...current,
+          [completed.conversation_id]: [
+            ...(current[completed.conversation_id] ?? []),
+            {
+              kind: 'agent',
+              id: completed.assistant_message_id,
+              question: content.trim(),
+              response: completed,
+            },
+          ],
+        }))
+        setPendingApproval(null)
+        setApprovalStatus('The changed request completed safely.')
+      }
+    } catch (reason) {
+      setError(safeError(reason))
+    } finally {
+      setApprovalResolving(false)
+    }
+  }
+
   async function continueWithDeep() {
     if (!upgradeRequest || !auth.accessToken || sending) return
     const controller = new AbortController()
@@ -350,43 +505,53 @@ export function ChatPage() {
     setSendingMode(upgradeRequest.submissionMode)
     setError(null)
     try {
-      const response =
-        upgradeRequest.submissionMode === 'agent'
-          ? await runConversationAgent(
-              auth.accessToken,
-              upgradeRequest.conversationId,
-              upgradeRequest.content,
-              controller.signal,
-              'deep',
-            )
-          : await sendConversationMessage(
-              auth.accessToken,
-              upgradeRequest.conversationId,
-              upgradeRequest.content,
-              controller.signal,
-              'deep',
-            )
-      const turn: ChatTurn =
-        upgradeRequest.submissionMode === 'agent'
-          ? {
-              kind: 'agent',
-              id: (response.data as AgentRunData).assistant_message_id,
-              question: upgradeRequest.content,
-              response: response.data as AgentRunData,
-            }
-          : {
-              kind: 'grounded',
-              id: (response.data as GroundedAnswerData).assistant_message_id,
-              question: upgradeRequest.content,
-              response: response.data as GroundedAnswerData,
-            }
-      setTurnsByConversation((current) => ({
-        ...current,
-        [upgradeRequest.conversationId]: [
-          ...(current[upgradeRequest.conversationId] ?? []),
-          turn,
-        ],
-      }))
+      let turn: ChatTurn | null = null
+      if (upgradeRequest.submissionMode === 'agent') {
+        const response = await runConversationAgent(
+          auth.accessToken,
+          upgradeRequest.conversationId,
+          upgradeRequest.content,
+          controller.signal,
+          'deep',
+          agentControlMode,
+        )
+        if ('outcome' in response.data) {
+          setPendingApproval({
+            data: response.data,
+            question: upgradeRequest.content,
+          })
+        } else {
+          turn = {
+            kind: 'agent',
+            id: response.data.assistant_message_id,
+            question: upgradeRequest.content,
+            response: response.data,
+          }
+        }
+      } else {
+        const response = await sendConversationMessage(
+          auth.accessToken,
+          upgradeRequest.conversationId,
+          upgradeRequest.content,
+          controller.signal,
+          'deep',
+        )
+        turn = {
+          kind: 'grounded',
+          id: response.data.assistant_message_id,
+          question: upgradeRequest.content,
+          response: response.data,
+        }
+      }
+      if (turn) {
+        setTurnsByConversation((current) => ({
+          ...current,
+          [upgradeRequest.conversationId]: [
+            ...(current[upgradeRequest.conversationId] ?? []),
+            turn,
+          ],
+        }))
+      }
       setQuestion('')
       setUpgradeRequest(null)
     } catch (requestError) {
@@ -581,6 +746,17 @@ export function ChatPage() {
               </section>
             ) : null}
             {error ? <ErrorCard error={error} /> : null}
+            {pendingApproval ? (
+              <AgentApprovalCard
+                approval={pendingApproval.data.approval}
+                resolving={approvalResolving}
+                onApprove={() => void resolvePending('approve_once')}
+                onReject={() => void resolvePending('reject')}
+                onStop={() => void stopPending()}
+                onChangeRequest={(content) => void submitChange(content)}
+              />
+            ) : null}
+            {approvalStatus ? <p role="status">{approvalStatus}</p> : null}
             {upgradeRequest ? (
               <section
                 className="chat-state-card chat-state-card--upgrade"
@@ -649,6 +825,45 @@ export function ChatPage() {
                       value={value}
                       checked={responseMode === value}
                       onChange={() => setResponseMode(value)}
+                    />
+                    <span>{label}</span>
+                    <small>{description}</small>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <fieldset
+              className="response-mode-control"
+              disabled={sending || approvalResolving}
+            >
+              <legend>Agent control mode</legend>
+              <p className="field-help">
+                Response mode controls model capability. Agent control controls
+                when tools pause.
+              </p>
+              <div className="response-mode-options">
+                {(
+                  [
+                    ['guided', 'Guided', 'Pause before every tool action.'],
+                    [
+                      'balanced',
+                      'Balanced',
+                      'Run safe read-only tools; pause for higher risk.',
+                    ],
+                    [
+                      'autonomous',
+                      'Autonomous',
+                      'Run authorized tools inside fixed host limits.',
+                    ],
+                  ] as const
+                ).map(([value, label, description]) => (
+                  <label key={value} className="response-mode-option">
+                    <input
+                      type="radio"
+                      name="agent-control-mode"
+                      value={value}
+                      checked={agentControlMode === value}
+                      onChange={() => setAgentControlMode(value)}
                     />
                     <span>{label}</span>
                     <small>{description}</small>
