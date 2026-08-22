@@ -56,16 +56,28 @@ class _Chunk:
     row_end: int
 
 
-def _authorized_finance_company_ids(scope: AuthorizationScope) -> tuple[UUID, ...]:
-    company_ids: list[UUID] = []
+def _authorized_finance_company_id(scope: AuthorizationScope, company_selector: str) -> UUID:
+    direct_matches: list[UUID] = []
+    workspace_alias_matches: list[UUID] = []
     for grant in scope.grants:
         departments = {item.key for item in grant.departments}
         if Capability.QUERY_DOCUMENTS not in grant.capabilities or "finance" not in departments:
             continue
-        company_ids.extend(grant.company_ids)
-    if not company_ids:
+        company_pairs = tuple(zip(grant.company_ids, grant.company_slugs, strict=True))
+        direct_matches.extend(
+            company_id
+            for company_id, company_slug in company_pairs
+            if company_slug == company_selector
+        )
+        if company_selector in {grant.home_tenant_slug, grant.workspace_slug}:
+            grant_company_ids = tuple(dict.fromkeys(grant.company_ids))
+            if len(grant_company_ids) == 1:
+                workspace_alias_matches.extend(grant_company_ids)
+
+    matches = tuple(dict.fromkeys(direct_matches or workspace_alias_matches))
+    if len(matches) != 1:
         raise CalculationAuthorizationError
-    return tuple(dict.fromkeys(company_ids))
+    return matches[0]
 
 
 def _trusted_input(
@@ -127,26 +139,24 @@ async def calculate_authorized_metric(
     company_slug: str,
     period: str,
 ) -> CalculationResult:
-    authorized_company_ids = _authorized_finance_company_ids(scope)
-    company_ids = tuple(
+    authorized_company_id = _authorized_finance_company_id(scope, company_slug)
+    company_rows = tuple(
         (
             await session.execute(
-                select(Company.id).where(
-                    Company.id.in_(authorized_company_ids),
-                    Company.slug == company_slug,
+                select(Company.id, Company.slug).where(
+                    Company.id == authorized_company_id,
                     Company.status == CompanyStatus.ACTIVE,
                 )
             )
-        )
-        .scalars()
-        .all()
+        ).all()
     )
-    if not company_ids:
+    if len(company_rows) != 1:
         raise CalculationAuthorizationError
+    canonical_company_id, canonical_company_slug = company_rows[0]
     authorized_chunks = (
         authorized_chunks_statement(scope)
         .where(
-            DocumentChunk.company_id.in_(company_ids),
+            DocumentChunk.company_id == canonical_company_id,
             DocumentChunk.department == "finance",
             DocumentChunk.source_type == "xlsx",
             DocumentChunk.sheet_name == "P&L",
@@ -277,7 +287,7 @@ async def calculate_authorized_metric(
             results.append(
                 calculate(
                     metric,
-                    company_slug=company_slug,
+                    company_slug=canonical_company_slug,
                     period=period,
                     document_version_id=str(version_id),
                     inputs=tuple(trusted),

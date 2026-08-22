@@ -198,6 +198,13 @@ actual-request-derived router signals, and agentic route-reason persistence. A f
 again returned supported Gemini 3.1 Flash Lite `SIMPLE_LOW_RISK` and Gemini 3.7 Flash `MULTI_DOCUMENT` responses without
 fallback.
 
+Authenticated browser acceptance uses a genuinely one-document profile phrase for Auto/Fast and an
+explicit FY2024/FY2025 comparison for Deep routing. It also exposed and closed a live calculator
+usability gap: a Decision-stage `orion` workspace alias now resolves only when the immutable scope
+contains exactly one authorized Finance company, producing the canonical `orion-main` 10% EBITDA
+margin result. Unauthorized or ambiguous aliases still deny. No-model denial traces now persist the
+explicit `NO_MODEL_CALL` sentinel instead of a configured-but-unused model name.
+
 ## Known limitations
 
 - The retrieval score threshold is a deterministic routing heuristic, not a calibrated probability.
@@ -260,3 +267,21 @@ checkpoint.
 - Live advisory sample: `google/gemini-3.7-flash`, provider `Google`, Vertex BYOK confirmed, strict score validation passed, shared fallback disabled.
 
 The implementation and verification artifacts remain local and uncommitted on `codex/evaluation-42`.
+
+## Secure response modes — implemented locally
+
+- Shared strict `ResponseMode` (`fast`, `auto`, `deep`) flows through message, routing, chat, and
+  agent contracts; omitted mode defaults to Auto and model/provider/scope/route overrides remain
+  forbidden extras.
+- Routing records requested/resolved mode, model tier, safe reason, and upgrade status. Fast
+  complex/low-confidence/multi-document requests return a safe 409 with no provider call or message
+  persistence; Fast agent requests stop before Perception, Decision, MCP, and tools.
+- The accessible composer radio group defaults to Auto, is disabled in flight, applies to chat and
+  agent submissions, and renders route metadata plus explicit Continue-with-Deep/Cancel actions.
+- Dollar cost remains unset until an applicable stable Vertex list-price snapshot is unambiguous;
+  token/latency metadata remains available, and BYOK zero-cost metadata is never treated as zero
+  upstream cost.
+- The exact checked-in 42-case manifest is unchanged; response-mode tests are separate.
+
+No migration is required because this is request/response and existing trace metadata, not a
+persisted browser preference. Changes remain local and uncommitted on `codex/response-modes`.

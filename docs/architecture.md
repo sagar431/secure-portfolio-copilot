@@ -410,6 +410,13 @@ The agent assigns host `ev_N` IDs and constructs the claim and citations without
 calculate or copy the result. No calculator migration is required: results are reproducible
 response data derived from current approved parsed cells.
 
+Calculator company selectors are still untrusted. A canonical company slug is accepted only when it
+is paired with an eligible Finance company ID in the database-derived scope. A user-facing tenant or
+workspace alias may resolve to that canonical company only when the same eligible grant contains
+exactly one company; ambiguous and unauthorized aliases fail closed. The model never receives or
+creates effective scope, and the repository queries by the resolved authorized UUID before emitting
+the canonical slug in the result.
+
 ## Bounded AgentLoop and MCP path
 
 The Session 10 reference was inspected read-only. Steps 7 and 8 retain its useful single-session state,
@@ -540,3 +547,21 @@ Alembic revision `20260821_0009` adds `evaluation_runs` and `evaluation_case_res
 Retrieval applies tenant/company/department/lifecycle authorization in a materialized CTE before scoring. A second ranking stage round-robins the highest-ranked chunks per document, preventing one long document from crowding every slot in document-level Recall@5. No evaluator-only ACL shortcut exists.
 
 The optional judge uses `google/gemini-3.7-flash`, forces `google-vertex`, disables fallback, denies data collection, sends no tools or reasoning parameter, uses prompt-only JSON, validates locally, permits one provider attempt per judged case, and stops at two total calls.
+
+## Response-mode routing boundary
+
+```text
+strict mode enum -> ownership/capability/scope checks -> authorized retrieval/evidence sufficiency
+                 -> host automatic classification -> mode resolution
+                    -> Fast eligible: simple model
+                    -> Fast upgrade: safe 409, no persistence/provider
+                    -> Auto: simple or heavy model
+                    -> Deep: heavy model
+```
+
+The host-owned decision records requested mode, resolved mode, model tier, categorical reason, and
+upgrade-required state. The browser cannot submit route reasons, providers, model IDs, fallback
+controls, scope, or limits. For agent requests, Fast resolves to the upgrade response before
+Perception, Decision, MCP catalog construction, or tool execution; Auto and Deep use the heavy
+stages. All provider calls keep the fixed Vertex-only provider object, prompt-only JSON, and strict
+local validation, with no tools/reasoning/JSON-schema response format.

@@ -45,6 +45,13 @@ export const groundedAnswerData: GroundedAnswerData = {
   model_name: 'Gemini 3.1 Flash Lite',
   route_reason: 'SIMPLE_LOW_RISK',
   fallback_used: false,
+  requested_response_mode: 'auto',
+  resolved_response_mode: 'fast',
+  input_tokens: 700,
+  output_tokens: 140,
+  latency_ms: 2100,
+  estimated_model_cost_usd: null,
+  pricing_snapshot_date: null,
 }
 
 export const insufficientAnswerData: GroundedAnswerData = {
@@ -59,6 +66,13 @@ export const insufficientAnswerData: GroundedAnswerData = {
   model_name: null,
   route_reason: null,
   fallback_used: false,
+  requested_response_mode: 'auto',
+  resolved_response_mode: null,
+  input_tokens: null,
+  output_tokens: null,
+  latency_ms: 12,
+  estimated_model_cost_usd: null,
+  pricing_snapshot_date: null,
 }
 
 export const agentRunData: AgentRunData = {
@@ -113,6 +127,8 @@ export const agentRunData: AgentRunData = {
   ],
   model_name: 'Gemini 3.7 Flash',
   route_reason: 'AGENTIC_REQUEST',
+  requested_response_mode: 'auto',
+  resolved_response_mode: 'deep',
 }
 
 const calculationCitations = [

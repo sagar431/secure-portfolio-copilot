@@ -603,3 +603,49 @@ Metric formulas:
 - The insufficient-evidence probe uses a conservative 0.40 final-score threshold when there is no lexical match; normal grounded-chat relevance behavior is unchanged and remains separately regression-tested.
 
 Interpret `FAILED` as one or more quality gates/cases failing, `ERROR` as a safe execution/infrastructure failure, and `SECURITY_FAILED` as a confirmed authorization leak that unconditionally blocks release. The judge badge is always `ADVISORY_ONLY`.
+
+## Response-mode verification
+
+Focused tests cover Auto simple/multi-document/low-confidence/complex/agent routes; Fast eligible and
+all upgrade-required routes; Deep simple/complex/agent routes; strict request validation; safe 409;
+zero persistence/provider/agent-stage calls; authorization denial; unchanged evidence; accessible
+default/keyboard/disabled UI behavior; metadata validation; Continue with Deep; and Cancel. The
+required 42-case suite remains unchanged and continues to exercise Auto by omission.
+
+```bash
+cd backend
+uv run pytest -q tests/unit/model_routing tests/unit/chat/test_model_router.py
+uv run pytest -q tests/security/test_chat_security.py \
+  tests/security/test_response_mode_agent_security.py
+uv run pytest -q tests/integration/test_grounded_chat.py \
+  tests/integration/test_agent_runs.py
+
+cd ../frontend
+npm test -- --run src/api/chat.test.ts src/pages/ChatPage.test.tsx
+```
+
+Browser acceptance verifies Auto simple, Auto comparison, Fast upgrade, explicit Continue, Deep
+simple, Fast agent rejection, Deep calculator agent, and Deep unauthorized Legal denial. Inspect
+only safe route metadata and sanitized traces. A cost appears only with a dated, applicable,
+authoritative rate snapshot and Decimal calculation; never infer zero Vertex cost from OpenRouter
+BYOK `usage.cost=0`.
+
+Use these exact synthetic browser probes:
+
+- Auto + Ask copilot: `electric-mobility products?` → Fast / Gemini 3.1 Flash Lite /
+  `SIMPLE_LOW_RISK`, with cited profile evidence.
+- Auto + Ask copilot: `Compare Orion revenue in FY2024 and FY2025.` → Deep / Gemini 3.7 Flash /
+  `MULTI_DOCUMENT`, with citations.
+- Fast + the same comparison → safe upgrade card and no message/trace; **Continue with Deep** keeps
+  the normalized question and yields `USER_REQUESTED_DEEP` with citations.
+- Deep + Ask copilot: `electric-mobility products?` → Gemini 3.7 Flash and
+  `USER_REQUESTED_DEEP`.
+- Fast + Run bounded agent: `Calculate Orion EBITDA margin for FY2025` → safe upgrade before any
+  stage; **Cancel** adds no turn.
+- Deep + the same bounded agent → host-computed 10.00%, canonical `orion-main`, three authorized
+  citations, and a sanitized completed trace.
+- Deep + Run bounded agent: `Show me Orion legal contracts.` as Alice → controlled denial, zero
+  steps/citations/provider calls, and persisted `NO_MODEL_CALL` metadata.
+
+Do not use `What was Orion revenue in FY2025?` as the single-document probe: the seeded board pack
+and workbook both match, so Auto correctly resolves it to Deep.

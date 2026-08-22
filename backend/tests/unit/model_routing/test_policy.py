@@ -2,6 +2,7 @@ import pytest
 
 from app.model_routing import (
     ModelRoute,
+    ResponseMode,
     RouteReason,
     RoutingSignals,
     WorkloadKind,
@@ -73,3 +74,81 @@ def test_missing_confidence_routes_strong() -> None:
     )
     assert decision.route is ModelRoute.HEAVY
     assert decision.reason is RouteReason.LOW_CONFIDENCE
+
+
+@pytest.mark.parametrize(
+    ("mode", "signals", "route", "reason", "resolved", "upgrade"),
+    [
+        (
+            ResponseMode.FAST,
+            RoutingSignals(WorkloadKind.GROUNDED_ANSWER, "What was revenue?", 1, 0.9),
+            ModelRoute.SIMPLE,
+            RouteReason.FAST_MODE_ELIGIBLE,
+            ResponseMode.FAST,
+            False,
+        ),
+        (
+            ResponseMode.FAST,
+            RoutingSignals(WorkloadKind.GROUNDED_ANSWER, "What was revenue?", 2, 0.9),
+            ModelRoute.HEAVY,
+            RouteReason.DEEP_MODE_REQUIRED,
+            ResponseMode.DEEP,
+            True,
+        ),
+        (
+            ResponseMode.FAST,
+            RoutingSignals(WorkloadKind.GROUNDED_ANSWER, "What was revenue?", 1, 0.2),
+            ModelRoute.HEAVY,
+            RouteReason.DEEP_MODE_REQUIRED,
+            ResponseMode.DEEP,
+            True,
+        ),
+        (
+            ResponseMode.FAST,
+            RoutingSignals(WorkloadKind.GROUNDED_ANSWER, "Compare revenue", 1, 0.9),
+            ModelRoute.HEAVY,
+            RouteReason.DEEP_MODE_REQUIRED,
+            ResponseMode.DEEP,
+            True,
+        ),
+        (
+            ResponseMode.FAST,
+            RoutingSignals(WorkloadKind.AGENTIC, "Calculate margin", 0, None),
+            ModelRoute.HEAVY,
+            RouteReason.DEEP_MODE_REQUIRED,
+            ResponseMode.DEEP,
+            True,
+        ),
+        (
+            ResponseMode.DEEP,
+            RoutingSignals(WorkloadKind.GROUNDED_ANSWER, "What was revenue?", 1, 0.9),
+            ModelRoute.HEAVY,
+            RouteReason.USER_REQUESTED_DEEP,
+            ResponseMode.DEEP,
+            False,
+        ),
+        (
+            ResponseMode.DEEP,
+            RoutingSignals(WorkloadKind.AGENTIC, "Calculate margin", 0, None),
+            ModelRoute.HEAVY,
+            RouteReason.USER_REQUESTED_DEEP,
+            ResponseMode.DEEP,
+            False,
+        ),
+    ],
+)
+def test_response_modes_are_host_resolved(
+    mode: ResponseMode,
+    signals: RoutingSignals,
+    route: ModelRoute,
+    reason: RouteReason,
+    resolved: ResponseMode,
+    upgrade: bool,
+) -> None:
+    decision = route_model(signals, low_confidence_threshold=0.55, response_mode=mode)
+
+    assert decision.requested_response_mode is mode
+    assert decision.resolved_response_mode is resolved
+    assert decision.route is route
+    assert decision.reason is reason
+    assert decision.upgrade_required is upgrade

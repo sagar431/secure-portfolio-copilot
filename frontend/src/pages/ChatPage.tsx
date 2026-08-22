@@ -18,6 +18,7 @@ import type {
   ConversationData,
   GroundedAnswerData,
   GroundedCitationData,
+  ResponseMode,
 } from '../types/chat'
 import { CHAT_QUESTION_MAX_LENGTH } from '../types/chat'
 
@@ -52,6 +53,12 @@ const DENIAL_CODES = new Set([
 ])
 
 type SubmissionMode = 'grounded' | 'agent'
+
+interface UpgradeRequest {
+  conversationId: string
+  content: string
+  submissionMode: SubmissionMode
+}
 
 function safeError(error: unknown): SafeError {
   if (error instanceof ApiError) {
@@ -124,6 +131,13 @@ function agentAnswer(run: AgentRunData): GroundedAnswerData {
     model_name: run.model_name,
     route_reason: run.route_reason,
     fallback_used: false,
+    requested_response_mode: run.requested_response_mode,
+    resolved_response_mode: run.resolved_response_mode,
+    input_tokens: null,
+    output_tokens: null,
+    latency_ms: null,
+    estimated_model_cost_usd: null,
+    pricing_snapshot_date: null,
   }
 }
 
@@ -135,12 +149,16 @@ export function ChatPage() {
     Record<string, ChatTurn[]>
   >({})
   const [question, setQuestion] = useState('')
+  const [responseMode, setResponseMode] = useState<ResponseMode>('auto')
   const [loadingList, setLoadingList] = useState(true)
   const [creating, setCreating] = useState(false)
   const [sending, setSending] = useState(false)
   const [sendingMode, setSendingMode] = useState<SubmissionMode>('grounded')
   const [canceled, setCanceled] = useState(false)
   const [error, setError] = useState<SafeError | null>(null)
+  const [upgradeRequest, setUpgradeRequest] = useState<UpgradeRequest | null>(
+    null,
+  )
   const [openCitation, setOpenCitation] = useState<GroundedCitationData | null>(
     null,
   )
@@ -186,6 +204,7 @@ export function ChatPage() {
     }
     setCreating(true)
     setError(null)
+    setUpgradeRequest(null)
     setCanceled(false)
     try {
       const response = await createConversation(auth.accessToken, null)
@@ -234,10 +253,11 @@ export function ChatPage() {
     setSending(true)
     setSendingMode(submissionMode)
     setError(null)
+    setUpgradeRequest(null)
     setCanceled(false)
     setOpenCitation(null)
+    let conversationId = selectedId
     try {
-      let conversationId = selectedId
       if (!conversationId) {
         const created = await createConversation(
           auth.accessToken,
@@ -249,13 +269,23 @@ export function ChatPage() {
         setConversations((current) => [conversation, ...current])
         setSelectedId(conversation.id)
       }
+      if (!conversationId) {
+        throw new ApiError(
+          'Conversation could not be created.',
+          0,
+          'invalid_conversation_id',
+          null,
+        )
+      }
+      const targetConversationId = conversationId
       const turn: ChatTurn =
         submissionMode === 'agent'
           ? await runConversationAgent(
               auth.accessToken,
-              conversationId,
+              targetConversationId,
               content,
               controller.signal,
+              responseMode,
             ).then((response) => ({
               kind: 'agent' as const,
               id: response.data.assistant_message_id,
@@ -264,9 +294,10 @@ export function ChatPage() {
             }))
           : await sendConversationMessage(
               auth.accessToken,
-              conversationId,
+              targetConversationId,
               content,
               controller.signal,
+              responseMode,
             ).then((response) => ({
               kind: 'grounded' as const,
               id: response.data.assistant_message_id,
@@ -275,7 +306,10 @@ export function ChatPage() {
             }))
       setTurnsByConversation((current) => ({
         ...current,
-        [conversationId]: [...(current[conversationId] ?? []), turn],
+        [targetConversationId]: [
+          ...(current[targetConversationId] ?? []),
+          turn,
+        ],
       }))
       setQuestion('')
     } catch (requestError) {
@@ -284,6 +318,15 @@ export function ChatPage() {
         requestError.name === 'AbortError'
       ) {
         setCanceled(true)
+        return
+      }
+      if (
+        requestError instanceof ApiError &&
+        requestError.status === 409 &&
+        requestError.code === 'deep_mode_required' &&
+        conversationId
+      ) {
+        setUpgradeRequest({ conversationId, content, submissionMode })
         return
       }
       setError(safeError(requestError))
@@ -297,6 +340,70 @@ export function ChatPage() {
 
   function cancelRequest() {
     activeRequest.current?.abort()
+  }
+
+  async function continueWithDeep() {
+    if (!upgradeRequest || !auth.accessToken || sending) return
+    const controller = new AbortController()
+    activeRequest.current = controller
+    setSending(true)
+    setSendingMode(upgradeRequest.submissionMode)
+    setError(null)
+    try {
+      const response =
+        upgradeRequest.submissionMode === 'agent'
+          ? await runConversationAgent(
+              auth.accessToken,
+              upgradeRequest.conversationId,
+              upgradeRequest.content,
+              controller.signal,
+              'deep',
+            )
+          : await sendConversationMessage(
+              auth.accessToken,
+              upgradeRequest.conversationId,
+              upgradeRequest.content,
+              controller.signal,
+              'deep',
+            )
+      const turn: ChatTurn =
+        upgradeRequest.submissionMode === 'agent'
+          ? {
+              kind: 'agent',
+              id: (response.data as AgentRunData).assistant_message_id,
+              question: upgradeRequest.content,
+              response: response.data as AgentRunData,
+            }
+          : {
+              kind: 'grounded',
+              id: (response.data as GroundedAnswerData).assistant_message_id,
+              question: upgradeRequest.content,
+              response: response.data as GroundedAnswerData,
+            }
+      setTurnsByConversation((current) => ({
+        ...current,
+        [upgradeRequest.conversationId]: [
+          ...(current[upgradeRequest.conversationId] ?? []),
+          turn,
+        ],
+      }))
+      setQuestion('')
+      setUpgradeRequest(null)
+    } catch (requestError) {
+      if (
+        requestError instanceof DOMException &&
+        requestError.name === 'AbortError'
+      ) {
+        setCanceled(true)
+      } else {
+        setError(safeError(requestError))
+      }
+    } finally {
+      if (activeRequest.current === controller) {
+        activeRequest.current = null
+        setSending(false)
+      }
+    }
   }
 
   const selectedConversation = conversations.find(
@@ -474,6 +581,38 @@ export function ChatPage() {
               </section>
             ) : null}
             {error ? <ErrorCard error={error} /> : null}
+            {upgradeRequest ? (
+              <section
+                className="chat-state-card chat-state-card--upgrade"
+                role="alert"
+              >
+                <p className="eyebrow">Deep mode required</p>
+                <h3>
+                  This request needs Deep mode because it requires broader
+                  analysis.
+                </h3>
+                <p>
+                  No provider or agent-stage call was made for the Fast attempt.
+                </p>
+                <div className="upgrade-actions">
+                  <button
+                    type="button"
+                    className="primary-button"
+                    disabled={sending}
+                    onClick={() => void continueWithDeep()}
+                  >
+                    Continue with Deep
+                  </button>
+                  <button
+                    type="button"
+                    disabled={sending}
+                    onClick={() => setUpgradeRequest(null)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </section>
+            ) : null}
           </div>
 
           <form
@@ -481,6 +620,42 @@ export function ChatPage() {
             aria-busy={sending}
             onSubmit={(event) => void submit(event)}
           >
+            <fieldset className="response-mode-control" disabled={sending}>
+              <legend>Response mode</legend>
+              <div className="response-mode-options">
+                {(
+                  [
+                    [
+                      'fast',
+                      'Fast',
+                      'Lower cost. Best for simple questions from clear evidence.',
+                    ],
+                    [
+                      'auto',
+                      'Auto',
+                      'Recommended. The system chooses the appropriate model.',
+                    ],
+                    [
+                      'deep',
+                      'Deep',
+                      'Uses the stronger model for comparisons and complex analysis.',
+                    ],
+                  ] as const
+                ).map(([value, label, description]) => (
+                  <label key={value} className="response-mode-option">
+                    <input
+                      type="radio"
+                      name="response-mode"
+                      value={value}
+                      checked={responseMode === value}
+                      onChange={() => setResponseMode(value)}
+                    />
+                    <span>{label}</span>
+                    <small>{description}</small>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
             <label htmlFor="chat-question">Ask about approved documents</label>
             <textarea
               id="chat-question"

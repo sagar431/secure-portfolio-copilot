@@ -1455,6 +1455,78 @@ td {
   background: #fff;
 }
 
+.response-mode-control {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.response-mode-control legend {
+  margin-bottom: 0.55rem;
+  font-weight: 700;
+}
+
+.response-mode-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.response-mode-option {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.45rem;
+  align-items: center;
+  padding: 0.7rem;
+  border: 1px solid var(--border-color, #cbd5e1);
+  border-radius: 0.75rem;
+  cursor: pointer;
+}
+
+.response-mode-option:has(input:checked) {
+  border-color: var(--accent-color, #2563eb);
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.response-mode-option small {
+  grid-column: 2;
+}
+
+.response-route-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.25rem;
+  margin: 0.75rem 0;
+}
+
+.response-route-metadata div {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.response-route-metadata dt {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: var(--muted-color, #64748b);
+}
+
+.response-route-metadata dd {
+  margin: 0;
+  font-weight: 650;
+}
+
+.upgrade-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+@media (max-width: 720px) {
+  .response-mode-options {
+    grid-template-columns: 1fr;
+  }
+}
+
 .chat-composer label {
   color: #31473e;
   font-size: 0.9rem;

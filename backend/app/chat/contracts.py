@@ -3,7 +3,7 @@ from enum import StrEnum
 from typing import Literal, Protocol
 from uuid import UUID
 
-from app.model_routing import RouteReason, RoutingSignals
+from app.model_routing import ResponseMode, RouteReason, RoutingSignals
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +36,7 @@ class GroundedGenerationRequest:
     evidence: tuple[GroundedEvidence, ...]
     memories: tuple[GroundedMemory, ...] = ()
     routing: RoutingSignals | None = None
+    response_mode: ResponseMode = ResponseMode.AUTO
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +62,8 @@ class LLMUsage:
     route_reason: str | None = None
     fallback_used: bool = False
     fallback_reason: str | None = None
+    requested_response_mode: ResponseMode = ResponseMode.AUTO
+    resolved_response_mode: ResponseMode | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -25,6 +25,7 @@ from app.chat.service import (
 )
 from app.core.config import Settings
 from app.core.errors import APIError
+from app.model_routing import ResponseMode
 from app.models.chat import ChatRequestTrace
 from app.models.identity import Capability, GrantSource
 from app.policies.models import (
@@ -342,9 +343,12 @@ async def _message_stub(*_: object, **__: object) -> object:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("response_mode", list(ResponseMode))
 @pytest.mark.parametrize("question", ["show me atlas data", "orion legal clause"])
 async def test_lowercase_cross_tenant_or_department_target_abstains_without_provider_call(
-    question: str, monkeypatch: pytest.MonkeyPatch
+    question: str,
+    response_mode: ResponseMode,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _context()
     tenant_id = context.scope.grants[0].home_tenant_id
@@ -367,6 +371,7 @@ async def test_lowercase_cross_tenant_or_department_target_abstains_without_prov
         context,
         conversation_id=conversation.id,
         question=question,
+        response_mode=response_mode,
         request_id="chat-security-target-denial",
     )
 
@@ -374,6 +379,47 @@ async def test_lowercase_cross_tenant_or_department_target_abstains_without_prov
     assert provider.requests == []
     assert response.status == "insufficient_evidence"
     assert response.citations == ()
+    assert response.requested_response_mode is response_mode
+    assert response.resolved_response_mode is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_mode", list(ResponseMode))
+async def test_no_authorized_evidence_skips_provider_for_every_response_mode(
+    response_mode: ResponseMode,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context()
+    conversation = SimpleNamespace(
+        id=uuid4(),
+        tenant_id=context.scope.grants[0].home_tenant_id,
+        user_id=context.identity.user_id,
+    )
+    monkeypatch.setattr(
+        "app.chat.service.get_owned_conversation",
+        lambda *args, **kwargs: _async_value(conversation),
+    )
+    monkeypatch.setattr("app.chat.service.add_message", _message_stub)
+    monkeypatch.setattr("app.chat.service.add_trace", lambda *args, **kwargs: None)
+    search = _SearchService(())
+    provider = _RecordingProvider()
+    service = GroundedChatService(  # type: ignore[arg-type]
+        _Session(), search, provider, max_evidence_chunks=5
+    )
+
+    response = await service.answer(
+        context,
+        conversation_id=conversation.id,
+        question="what was orion revenue?",
+        response_mode=response_mode,
+        request_id=f"chat-no-evidence-{response_mode.value}",
+    )
+
+    assert search.calls == 1
+    assert provider.requests == []
+    assert response.status == "insufficient_evidence"
+    assert response.requested_response_mode is response_mode
+    assert response.resolved_response_mode is None
 
 
 @pytest.mark.asyncio
@@ -428,6 +474,52 @@ async def test_authorized_retrieval_precedes_prompt_and_only_retrieved_evidence_
     assert response.status == "grounded"
     assert response.claims[0].citation_ids == ("ev_1",)
     assert response.citations[0].document_id == result.document_id
+
+
+@pytest.mark.asyncio
+async def test_fast_multi_document_rejection_has_zero_model_and_message_writes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context()
+    conversation = SimpleNamespace(
+        id=uuid4(),
+        tenant_id=context.scope.grants[0].home_tenant_id,
+        user_id=context.identity.user_id,
+    )
+    message_calls = 0
+
+    async def record_message(*_: object, **__: object) -> object:
+        nonlocal message_calls
+        message_calls += 1
+        return SimpleNamespace(id=uuid4())
+
+    monkeypatch.setattr(
+        "app.chat.service.get_owned_conversation",
+        lambda *args, **kwargs: _async_value(conversation),
+    )
+    monkeypatch.setattr("app.chat.service.add_message", record_message)
+    provider = _RecordingProvider()
+    service = GroundedChatService(  # type: ignore[arg-type]
+        _Session(),
+        _SearchService((_search_result(), _search_result())),
+        provider,
+        max_evidence_chunks=5,
+    )
+
+    with pytest.raises(APIError) as captured:
+        await service.answer(
+            context,
+            conversation_id=conversation.id,
+            question="what was orion revenue?",
+            response_mode=ResponseMode.FAST,
+            request_id="fast-upgrade-required",
+        )
+
+    assert captured.value.status_code == 409
+    assert captured.value.code == "deep_mode_required"
+    assert captured.value.message == "This request requires broader analysis."
+    assert provider.requests == []
+    assert message_calls == 0
 
 
 @pytest.mark.asyncio

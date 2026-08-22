@@ -1,6 +1,6 @@
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 from uuid import UUID
 
@@ -26,7 +26,7 @@ from app.chat.repository import (
 from app.chat.scope_guard import request_matches_authorized_scope, resolve_home_tenant_id
 from app.core.errors import APIError
 from app.memory.repository import list_visible_memories, resolve_authorized_company_ids
-from app.model_routing import RoutingSignals, WorkloadKind
+from app.model_routing import ResponseMode, RoutingSignals, WorkloadKind, route_model
 from app.models.chat import Conversation
 from app.models.identity import Capability
 from app.policies.models import AuthorizationContext
@@ -168,12 +168,14 @@ class GroundedChatService:
         *,
         max_evidence_chunks: int,
         max_memory_items: int = 0,
+        low_confidence_threshold: float = 0.55,
     ) -> None:
         self.session = session
         self.search_service = search_service
         self.llm_provider = llm_provider
         self.max_evidence_chunks = max_evidence_chunks
         self.max_memory_items = max_memory_items
+        self.low_confidence_threshold = low_confidence_threshold
 
     async def create(
         self, context: AuthorizationContext, *, title: str | None
@@ -205,6 +207,7 @@ class GroundedChatService:
         *,
         conversation_id: UUID,
         question: str,
+        response_mode: ResponseMode = ResponseMode.AUTO,
         request_id: str,
     ) -> GroundedMessageData:
         started = time.monotonic()
@@ -222,15 +225,15 @@ class GroundedChatService:
         ):
             raise APIError(403, "forbidden", "Grounded chat is not permitted.")
 
-        user_message = await add_message(
-            self.session,
-            conversation=conversation,
-            user_id=context.identity.user_id,
-            role="user",
-            content=question,
-            request_id=request_id,
-        )
         if not request_matches_authorized_scope(context, question):
+            user_message = await add_message(
+                self.session,
+                conversation=conversation,
+                user_id=context.identity.user_id,
+                role="user",
+                content=question,
+                request_id=request_id,
+            )
             return await self._persist_answer(
                 context=context,
                 conversation=conversation,
@@ -242,7 +245,10 @@ class GroundedChatService:
                 citations=(),
                 limitations=("The requested scope is not available in authorized evidence.",),
                 evidence=(),
-                usage=LLMUsage(latency_ms=int((time.monotonic() - started) * 1000)),
+                usage=LLMUsage(
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                    requested_response_mode=response_mode,
+                ),
                 reason_code="REQUEST_SCOPE_NOT_AUTHORIZED",
             )
         search = await self.search_service.search(
@@ -261,6 +267,14 @@ class GroundedChatService:
             evidence = ()
 
         if not evidence:
+            user_message = await add_message(
+                self.session,
+                conversation=conversation,
+                user_id=context.identity.user_id,
+                role="user",
+                content=question,
+                request_id=request_id,
+            )
             return await self._persist_answer(
                 context=context,
                 conversation=conversation,
@@ -272,7 +286,10 @@ class GroundedChatService:
                 citations=(),
                 limitations=("No sufficient authorized evidence was retrieved.",),
                 evidence=(),
-                usage=LLMUsage(latency_ms=int((time.monotonic() - started) * 1000)),
+                usage=LLMUsage(
+                    latency_ms=int((time.monotonic() - started) * 1000),
+                    requested_response_mode=response_mode,
+                ),
                 reason_code="INSUFFICIENT_AUTHORIZED_EVIDENCE",
             )
 
@@ -303,20 +320,41 @@ class GroundedChatService:
                 for item in visible_memories
             )
 
+        routing_signals = RoutingSignals(
+            workload=WorkloadKind.GROUNDED_ANSWER,
+            question=question,
+            authorized_document_count=len({item.document_id for item in sufficient_results}),
+            top_retrieval_score=max(item.scores.final for item in sufficient_results),
+        )
+        routing_decision = route_model(
+            routing_signals,
+            low_confidence_threshold=self.low_confidence_threshold,
+            response_mode=response_mode,
+        )
+        if routing_decision.upgrade_required:
+            raise APIError(
+                409,
+                "deep_mode_required",
+                "This request requires broader analysis.",
+            )
+
+        user_message = await add_message(
+            self.session,
+            conversation=conversation,
+            user_id=context.identity.user_id,
+            role="user",
+            content=question,
+            request_id=request_id,
+        )
+
         try:
             generation = await self.llm_provider.generate(
                 GroundedGenerationRequest(
                     question=question,
                     evidence=evidence,
                     memories=memories,
-                    routing=RoutingSignals(
-                        workload=WorkloadKind.GROUNDED_ANSWER,
-                        question=question,
-                        authorized_document_count=len(
-                            {item.document_id for item in sufficient_results}
-                        ),
-                        top_retrieval_score=max(item.scores.final for item in sufficient_results),
-                    ),
+                    routing=routing_signals,
+                    response_mode=response_mode,
                 )
             )
         except LLMProviderError as exc:
@@ -353,6 +391,19 @@ class GroundedChatService:
             raise APIError(
                 503, "llm_unavailable", "The answer service is temporarily unavailable."
             ) from None
+
+        generation = replace(
+            generation,
+            usage=replace(
+                generation.usage,
+                route_reason=generation.usage.route_reason or routing_decision.reason.value,
+                requested_response_mode=response_mode,
+                resolved_response_mode=(
+                    generation.usage.resolved_response_mode
+                    or routing_decision.resolved_response_mode
+                ),
+            ),
+        )
 
         try:
             validated = validate_grounded_answer(generation.answer, evidence)
@@ -415,12 +466,18 @@ class GroundedChatService:
             request_id=request_id,
         )
         trace_status = "grounded" if status == "grounded" else "insufficient_evidence"
+        model_was_called = usage.resolved_response_mode is not None
+        trace_model_name = (
+            usage.model_name or self.llm_provider.model_name
+            if model_was_called
+            else "NO_MODEL_CALL"
+        )
         add_trace(
             self.session,
             request_id=request_id,
             conversation=conversation,
             user_id=context.identity.user_id,
-            model_name=usage.model_name or self.llm_provider.model_name,
+            model_name=trace_model_name,
             status=trace_status,
             reason_code=reason_code,
             document_ids=tuple(dict.fromkeys(item.document_id for item in evidence)),
@@ -429,7 +486,9 @@ class GroundedChatService:
             output_tokens=usage.output_tokens,
             latency_ms=usage.latency_ms,
             retry_count=usage.retry_count,
-            route_reason_code=usage.route_reason or "PROVIDER_SELECTED",
+            route_reason_code=(
+                usage.route_reason or "PROVIDER_SELECTED" if model_was_called else "NO_MODEL_CALL"
+            ),
             fallback_used=usage.fallback_used,
             fallback_reason_code=usage.fallback_reason,
         )
@@ -454,7 +513,18 @@ class GroundedChatService:
             claims=claims,
             citations=citations,
             limitations=limitations,
-            model_name=safe_model_name(usage.model_name or self.llm_provider.model_name),
+            model_name=(
+                safe_model_name(usage.model_name or self.llm_provider.model_name)
+                if model_was_called
+                else None
+            ),
             route_reason=usage.route_reason,
             fallback_used=usage.fallback_used,
+            requested_response_mode=usage.requested_response_mode,
+            resolved_response_mode=usage.resolved_response_mode,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            latency_ms=usage.latency_ms,
+            estimated_model_cost_usd=None,
+            pricing_snapshot_date=None,
         )

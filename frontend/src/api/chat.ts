@@ -11,6 +11,7 @@ import type {
   GroundedAnswerData,
   GroundedCitationData,
   GroundedClaimData,
+  ResponseMode,
   SendConversationMessageRequest,
 } from '../types/chat'
 import {
@@ -326,6 +327,13 @@ function isGroundedAnswerData(value: unknown): value is GroundedAnswerData {
       'model_name',
       'route_reason',
       'fallback_used',
+      'requested_response_mode',
+      'resolved_response_mode',
+      'input_tokens',
+      'output_tokens',
+      'latency_ms',
+      'estimated_model_cost_usd',
+      'pricing_snapshot_date',
     ]) ||
     !isUuid(value.conversation_id) ||
     !isUuid(value.user_message_id) ||
@@ -342,7 +350,14 @@ function isGroundedAnswerData(value: unknown): value is GroundedAnswerData {
     ) ||
     !isSafeModelName(value.model_name) ||
     !isSafeRouteReason(value.route_reason) ||
-    typeof value.fallback_used !== 'boolean'
+    typeof value.fallback_used !== 'boolean' ||
+    !isResponseMode(value.requested_response_mode) ||
+    !isNullableResponseMode(value.resolved_response_mode) ||
+    !isNullableTokenCount(value.input_tokens) ||
+    !isNullableTokenCount(value.output_tokens) ||
+    !isNullableLatency(value.latency_ms) ||
+    !isNullableCost(value.estimated_model_cost_usd) ||
+    !isNullablePricingDate(value.pricing_snapshot_date)
   ) {
     return false
   }
@@ -368,12 +383,59 @@ function isSafeCounter(value: unknown): value is number {
 
 const SAFE_MODEL_NAMES = new Set(['Gemini 3.1 Flash Lite', 'Gemini 3.7 Flash'])
 const SAFE_ROUTE_REASONS = new Set([
+  'USER_REQUESTED_DEEP',
+  'FAST_MODE_ELIGIBLE',
+  'DEEP_MODE_REQUIRED',
   'SIMPLE_LOW_RISK',
   'MULTI_DOCUMENT',
   'LOW_CONFIDENCE',
   'COMPLEX_REQUEST',
   'AGENTIC_REQUEST',
 ])
+
+const RESPONSE_MODES = new Set(['fast', 'auto', 'deep'])
+
+function isResponseMode(value: unknown): value is ResponseMode {
+  return typeof value === 'string' && RESPONSE_MODES.has(value)
+}
+
+function isNullableResponseMode(value: unknown): value is ResponseMode | null {
+  return value === null || isResponseMode(value)
+}
+
+function isNullableTokenCount(value: unknown): value is number | null {
+  return (
+    value === null ||
+    (typeof value === 'number' &&
+      Number.isInteger(value) &&
+      value >= 0 &&
+      value <= 10_000_000)
+  )
+}
+
+function isNullableLatency(value: unknown): value is number | null {
+  return (
+    value === null ||
+    (typeof value === 'number' &&
+      Number.isInteger(value) &&
+      value >= 0 &&
+      value <= 3_600_000)
+  )
+}
+
+function isNullableCost(value: unknown): value is string | null {
+  return (
+    value === null ||
+    (typeof value === 'string' && /^\d+\.\d{1,12}$/.test(value))
+  )
+}
+
+function isNullablePricingDate(value: unknown): value is string | null {
+  return (
+    value === null ||
+    (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value))
+  )
+}
 
 function isSafeModelName(value: unknown) {
   return (
@@ -512,6 +574,8 @@ function isAgentRunData(value: unknown): value is AgentRunData {
       'trace',
       'model_name',
       'route_reason',
+      'requested_response_mode',
+      'resolved_response_mode',
     ]) ||
     !isUuid(value.conversation_id) ||
     !isUuid(value.user_message_id) ||
@@ -539,6 +603,8 @@ function isAgentRunData(value: unknown): value is AgentRunData {
     !Array.isArray(value.trace) ||
     !isSafeModelName(value.model_name) ||
     !isSafeRouteReason(value.route_reason) ||
+    !isResponseMode(value.requested_response_mode) ||
+    !isNullableResponseMode(value.resolved_response_mode) ||
     value.trace.length === 0 ||
     value.trace.length > 256 ||
     !value.trace.every(isAgentTraceEvent)
@@ -604,7 +670,10 @@ function validateTitle(title: string | null): CreateConversationRequest {
   return { title: trimmedTitle }
 }
 
-function validateMessage(content: string): SendConversationMessageRequest {
+function validateMessage(
+  content: string,
+  responseMode: ResponseMode,
+): SendConversationMessageRequest {
   const trimmedContent = content.trim()
   if (!trimmedContent || trimmedContent.length > CHAT_QUESTION_MAX_LENGTH) {
     throw new ApiError(
@@ -614,7 +683,15 @@ function validateMessage(content: string): SendConversationMessageRequest {
       null,
     )
   }
-  return { content: trimmedContent }
+  if (!isResponseMode(responseMode)) {
+    throw new ApiError(
+      'Select a valid response mode.',
+      0,
+      'invalid_response_mode',
+      null,
+    )
+  }
+  return { content: trimmedContent, response_mode: responseMode }
 }
 
 export async function listConversations(
@@ -653,6 +730,7 @@ export async function sendConversationMessage(
   conversationId: string,
   content: string,
   signal?: AbortSignal,
+  responseMode: ResponseMode = 'auto',
 ): Promise<ApiSuccessEnvelope<GroundedAnswerData>> {
   if (!isUuid(conversationId)) {
     throw new ApiError(
@@ -667,7 +745,7 @@ export async function sendConversationMessage(
     {
       method: 'POST',
       token,
-      body: validateMessage(content),
+      body: validateMessage(content, responseMode),
       signal,
     },
   )
@@ -685,6 +763,7 @@ export async function runConversationAgent(
   conversationId: string,
   content: string,
   signal?: AbortSignal,
+  responseMode: ResponseMode = 'auto',
 ): Promise<ApiSuccessEnvelope<AgentRunData>> {
   if (!isUuid(conversationId)) {
     throw new ApiError(
@@ -699,7 +778,7 @@ export async function runConversationAgent(
     {
       method: 'POST',
       token,
-      body: validateMessage(content),
+      body: validateMessage(content, responseMode),
       signal,
     },
   )

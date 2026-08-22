@@ -486,3 +486,38 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 Use Nora's development identity for the evaluation dashboard. Alice, Leo, Maya, Amir, and Lina do not receive `ADMINISTER_PLATFORM` and cannot see or call it. The optional Gemini judge is off by default, advisory only, restricted to at most two cases, and never influences authorization or deterministic release policy.
 
 `SECURITY_FAILED` means at least one forbidden document identifier reached an evaluation result. It overrides all aggregate scores and blocks release. Reports deliberately exclude questions, prompts, reasoning, document text, evidence excerpts, raw provider bodies, credentials, and stack traces.
+
+## Response mode: Fast, Auto, and Deep
+
+The chat composer sends one strict preference enum—`fast`, `auto`, or `deep`—for both **Ask
+copilot** and **Run bounded agent**. Auto is the backward-compatible default. Fast uses Gemini 3.1
+Flash Lite only for the existing `SIMPLE_LOW_RISK` classification. Auto preserves deterministic
+routing: one-document, high-confidence simple questions use Flash Lite; multi-document,
+low-confidence, complex, comparison, and agentic requests use Gemini 3.7 Flash. Deep always uses
+Gemini 3.7 Flash after authorization and evidence checks.
+
+Fast never silently upgrades. If host-owned signals require broader analysis, the API returns the
+content-free `deep_mode_required` 409 before provider/agent execution and before either message is
+persisted. The UI then requires an explicit **Continue with Deep** click to resend the same
+normalized question; **Cancel** sends nothing. Response metadata exposes only requested/selected
+mode, safe model display name, categorical route reason, fallback, token counts, and latency.
+
+Response mode controls cost/latency only. It cannot change tenant/company/department scope,
+lifecycle filters, memory visibility, tool capability, denial, evidence sufficiency, citations, or
+system limits. Model IDs remain server-owned and both approved models remain pinned to OpenRouter
+Google Vertex BYOK with fallback disabled and data collection denied. No reasoning, tools, or JSON
+schema response-format parameter is sent, and hidden reasoning is never stored or displayed.
+
+Demo questions:
+
+- Fast + Ask copilot: “electric-mobility products?”
+- Auto + Ask copilot: “Compare Orion revenue in FY2024 and FY2025.”
+- Deep + Run bounded agent: “Calculate Orion EBITDA margin for FY2025”
+
+The Fast question intentionally uses a profile-specific lexical phrase so the seeded hybrid search
+admits one authorized document. The generic FY2025 revenue question is not a Fast demo: it appears
+in both the board pack and workbook, so Auto correctly classifies it as multi-document Deep work.
+
+The UI omits a dollar estimate when a stable Vertex list-price snapshot cannot be applied without
+ambiguity, such as a temporary catalog discount. It still shows available token/model metadata and
+never treats OpenRouter BYOK `usage.cost=0` as zero Vertex cost.

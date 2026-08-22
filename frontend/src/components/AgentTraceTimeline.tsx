@@ -35,6 +35,16 @@ export function AgentTraceTimeline({
       </header>
 
       <dl className="agent-trace__summary">
+        <div>
+          <dt>Requested mode</dt>
+          <dd>{displayLabel(run.requested_response_mode)}</dd>
+        </div>
+        {run.resolved_response_mode ? (
+          <div>
+            <dt>Selected mode</dt>
+            <dd>{displayLabel(run.resolved_response_mode)}</dd>
+          </div>
+        ) : null}
         {run.model_name ? (
           <div>
             <dt>Model route</dt>

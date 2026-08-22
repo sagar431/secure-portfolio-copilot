@@ -33,6 +33,7 @@ def get_grounded_chat_service(
         create_llm_provider(settings),
         max_evidence_chunks=settings.llm_max_evidence_chunks,
         max_memory_items=5,
+        low_confidence_threshold=settings.router_low_confidence_threshold,
     )
 
 
@@ -79,6 +80,7 @@ async def create_message(
         context,
         conversation_id=conversation_id,
         question=payload.content,
+        response_mode=payload.response_mode,
         request_id=request.state.request_id,
     )
     return SuccessResponse(data=data, request_id=request.state.request_id)

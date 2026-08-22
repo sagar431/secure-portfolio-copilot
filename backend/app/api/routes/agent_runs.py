@@ -66,6 +66,7 @@ def get_agent_run_service(
         gateway,
         model_name=perception.model_name,
         route_reason_code=agent_route_reason(settings),
+        low_confidence_threshold=settings.router_low_confidence_threshold,
     )
 
 
@@ -87,6 +88,7 @@ async def create_agent_run(
         context,
         conversation_id=conversation_id,
         question=payload.content,
+        response_mode=payload.response_mode,
         request_id=request.state.request_id,
     )
     return SuccessResponse(data=data, request_id=request.state.request_id)

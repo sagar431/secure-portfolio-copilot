@@ -8,7 +8,9 @@ from app.chat.contracts import (
 )
 from app.model_routing import (
     ModelRoute,
+    ResponseMode,
     RouteReason,
+    RoutingDecision,
     RoutingSignals,
     WorkloadKind,
     route_model,
@@ -48,12 +50,27 @@ class DeterministicRoutingLLMProvider:
         decision = route_model(
             signals,
             low_confidence_threshold=self._low_confidence_threshold,
+            response_mode=request.response_mode,
         )
+        if decision.upgrade_required:
+            raise LLMProviderError(
+                LLMErrorCode.REJECTED,
+                model_name=None,
+                route_reason=decision.reason,
+            )
         if decision.route is ModelRoute.HEAVY:
-            return await self._generate_strong(request, decision.reason)
+            return await self._generate_strong(request, decision)
         try:
             generation = await self._simple.generate(request)
         except LLMProviderError as exc:
+            if request.response_mode is ResponseMode.FAST:
+                raise LLMProviderError(
+                    exc.code,
+                    transient=exc.transient,
+                    retry_count=exc.retry_count,
+                    model_name=self._simple.model_name,
+                    route_reason=decision.reason,
+                ) from None
             if exc.code not in {
                 LLMErrorCode.TIMEOUT,
                 LLMErrorCode.TRANSIENT,
@@ -88,6 +105,8 @@ class DeterministicRoutingLLMProvider:
                     fallback_used=True,
                     fallback_reason=f"SIMPLE_MODEL_{exc.code.value}",
                     extra_retries=1,
+                    requested_mode=decision.requested_response_mode,
+                    resolved_mode=ResponseMode.DEEP,
                 ),
             )
         return LLMGeneration(
@@ -96,11 +115,13 @@ class DeterministicRoutingLLMProvider:
                 generation.usage,
                 model_name=self._simple.model_name,
                 reason=decision.reason,
+                requested_mode=decision.requested_response_mode,
+                resolved_mode=decision.resolved_response_mode,
             ),
         )
 
     async def _generate_strong(
-        self, request: GroundedGenerationRequest, reason: RouteReason
+        self, request: GroundedGenerationRequest, decision: RoutingDecision
     ) -> LLMGeneration:
         try:
             generation = await self._heavy.generate(request)
@@ -110,14 +131,16 @@ class DeterministicRoutingLLMProvider:
                 transient=exc.transient,
                 retry_count=exc.retry_count,
                 model_name=self._heavy.model_name,
-                route_reason=reason,
+                route_reason=decision.reason,
             ) from None
         return LLMGeneration(
             answer=generation.answer,
             usage=self._usage(
                 generation.usage,
                 model_name=self._heavy.model_name,
-                reason=reason,
+                reason=decision.reason,
+                requested_mode=decision.requested_response_mode,
+                resolved_mode=decision.resolved_response_mode,
             ),
         )
 
@@ -127,6 +150,8 @@ class DeterministicRoutingLLMProvider:
         *,
         model_name: str,
         reason: RouteReason,
+        requested_mode: ResponseMode = ResponseMode.AUTO,
+        resolved_mode: ResponseMode = ResponseMode.AUTO,
         fallback_used: bool = False,
         fallback_reason: str | None = None,
         extra_retries: int = 0,
@@ -140,4 +165,6 @@ class DeterministicRoutingLLMProvider:
             route_reason=reason.value,
             fallback_used=fallback_used,
             fallback_reason=fallback_reason,
+            requested_response_mode=requested_mode,
+            resolved_response_mode=resolved_mode,
         )

@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.model_routing import ResponseMode
 from app.openrouter_vertex import OPENROUTER_HEAVY_MODEL, OPENROUTER_SIMPLE_MODEL
 
 
@@ -57,6 +58,7 @@ class CreateMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     content: str = Field(min_length=1, max_length=1000)
+    response_mode: ResponseMode = Field(default=ResponseMode.AUTO, strict=False)
 
     @field_validator("content")
     @classmethod
@@ -100,6 +102,13 @@ class GroundedMessageData(BaseModel):
     model_name: SafeModelName | None
     route_reason: str | None
     fallback_used: bool
+    requested_response_mode: ResponseMode
+    resolved_response_mode: ResponseMode | None
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    latency_ms: int = Field(ge=0)
+    estimated_model_cost_usd: str | None = None
+    pricing_snapshot_date: str | None = None
 
 
 class CalculationInputData(BaseModel):
@@ -166,3 +175,5 @@ class AgentRunMessageData(BaseModel):
     trace: tuple[AgentTraceEventData, ...]
     model_name: SafeModelName | None
     route_reason: str | None
+    requested_response_mode: ResponseMode
+    resolved_response_mode: ResponseMode | None

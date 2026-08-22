@@ -90,6 +90,7 @@ describe('conversation API', () => {
     }
     expect(JSON.parse(options.body)).toEqual({
       content: 'Why did margin improve?',
+      response_mode: 'auto',
     })
   })
 
@@ -142,6 +143,7 @@ describe('conversation API', () => {
     }
     expect(JSON.parse(options.body)).toEqual({
       content: 'Use the bounded workflow.',
+      response_mode: 'auto',
     })
   })
 
@@ -411,6 +413,13 @@ describe('conversation API', () => {
       'an extra answer key',
       {
         data: { ...groundedAnswerData, raw_prompt: 'must not pass' },
+        request_id: 'strict-request',
+      },
+    ],
+    [
+      'unknown response metadata',
+      {
+        data: { ...groundedAnswerData, resolved_response_mode: 'turbo' },
         request_id: 'strict-request',
       },
     ],

@@ -26,10 +26,12 @@ export interface CreateConversationRequest {
 
 export interface SendConversationMessageRequest {
   content: string
+  response_mode: ResponseMode
 }
 
 export type GroundedAnswerStatus = 'grounded' | 'insufficient_evidence'
 export type SafeModelName = 'Gemini 3.1 Flash Lite' | 'Gemini 3.7 Flash'
+export type ResponseMode = 'fast' | 'auto' | 'deep'
 
 export interface GroundedClaimData {
   text: string
@@ -64,6 +66,13 @@ export interface GroundedAnswerData {
   model_name: SafeModelName | null
   route_reason: string | null
   fallback_used: boolean
+  requested_response_mode: ResponseMode
+  resolved_response_mode: ResponseMode | null
+  input_tokens: number | null
+  output_tokens: number | null
+  latency_ms: number | null
+  estimated_model_cost_usd: string | null
+  pricing_snapshot_date: string | null
 }
 
 export type AgentTerminalStatus =
@@ -138,6 +147,8 @@ export interface AgentRunData {
   trace: AgentTraceEventData[]
   model_name: SafeModelName | null
   route_reason: string | null
+  requested_response_mode: ResponseMode
+  resolved_response_mode: ResponseMode | null
 }
 
 export interface GroundedChatTurn {

@@ -812,3 +812,32 @@ Memory checks must reauthorize source lifecycle, not merely filter a memory row.
 The Gemini judge is useful as an advisory signal only. Its prompt contains a controlled answer and already-authorized cited evidence, its response is a strict score/reason-code object, and its two-call budget is global to the run. A malformed provider response fails closed without retaining the body. Deterministic authorization, citation membership, and numeric exactness always win.
 
 Known limitation: the local deterministic suite uses the production service graph with a deterministic fake grounded-answer provider, while the separately bounded live judge check verifies the real OpenRouter Google Vertex BYOK route. This avoids turning a reproducible 42-case security gate into an unbounded provider-cost exercise.
+
+## Response mode design lessons
+
+Response mode is an untrusted performance preference, not an authorization input. The safest design
+first computes the existing automatic classification from already-authorized evidence and then
+applies Fast/Auto/Deep as a narrow host rule. Document text, memory, prompts, and model output never
+participate in mode selection.
+
+Fast rejection must occur late enough to use authorized retrieval signals but early enough that it
+cannot create a provider bill, start an agent stage, invoke MCP, or leave a half-turn in history.
+Chat therefore preflights after retrieval and before persistence/generation, while an agentic Fast
+request is rejected after scope checks and before its first Perception call.
+
+Deep means stronger model selection, not deeper permissions or visible reasoning. Denial and
+insufficient-evidence paths still make zero model calls, and the UI reports only categorical routing
+metadata. Hidden chain-of-thought is neither requested nor exposed.
+
+Cost reporting is also an accuracy contract. OpenRouter's catalog can distinguish provider rates
+from temporary discounts, while BYOK `usage.cost=0` says nothing about the upstream Vertex bill.
+When a stable applicable list-price snapshot is ambiguous, omitting cost is more honest than
+multiplying tokens by an invented rate.
+
+Live browser acceptance also found two places where realistic data mattered. A question that sounds
+simple can still be multi-document when the same metric exists in both a board pack and workbook;
+demo wording must exercise the actual retrieval set, not assume one document from phrasing alone.
+Separately, the live Decision stage named the user-facing workspace (`orion`) while the deterministic
+calculator stores a canonical company slug (`orion-main`). The safe usability fix is not to trust or
+prompt-inject scope: host code resolves that alias only inside eligible Finance grants and only when
+it identifies exactly one authorized company. Ambiguity and cross-workspace aliases remain denials.

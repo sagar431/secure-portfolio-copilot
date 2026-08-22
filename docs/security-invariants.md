@@ -234,20 +234,23 @@ These rules apply now and must remain true as later milestones are approved.
     cannot replay; and host comparison, not the model flag, consumes the one-replan budget.
 85. **Historical step isolation.** Steps 7 and 8 remain independently testable; later memory and
     calculator features do not weaken their document authorization, bounds, or citation gates.
+85a. **Calculator aliases remain authorization-bound.** A canonical company slug must match its
+    paired authorized Finance company ID. A tenant/workspace alias resolves only inside an eligible
+    grant containing exactly one company; ambiguous, cross-workspace, and unauthorized aliases deny.
 86. **Routing is deterministic backend policy.** Models and clients cannot select a route or change
     authorization. Routing inputs are host-owned workload/evidence signals only.
 87. **Authorization precedes routing.** Only rows admitted by current repository authorization may
     contribute document count, confidence, or model context. Denial and no-evidence paths call no
     generation model.
 88. **Strong routes never downgrade.** Multi-document, low-confidence, complex, and agentic work
-    uses Gemini 3.7 Flash. Only retryable simple-route Gemini 3.1 Flash Lite failures may fall forward to Gemini 3.7 Flash using the exact
-    same authorized request.
+    uses Gemini 3.7 Flash. Only retryable Auto simple-route Gemini 3.1 Flash Lite failures may fall
+    forward to Gemini 3.7 Flash using the exact same authorized request; Fast never falls forward.
 89. **Pinned Vertex-only boundary.** The endpoint, provider slug, and both model IDs are fixed;
     provider fallback, proxy inheritance, tools, streaming, and reasoning are disabled. Hidden
     response fields are discarded and visible output fails closed unless it matches the contract.
-90. **Safe route observability.** Traces contain actual model names and categorical host reason
-    codes only. Questions, evidence, prompts, provider bodies, authorization data, and model
-    reasoning remain absent.
+90. **Safe route observability.** Traces contain actual model names only after a call and otherwise
+    use the explicit `NO_MODEL_CALL` sentinel, alongside categorical host reason codes. Questions,
+    evidence, prompts, provider bodies, authorization data, and model reasoning remain absent.
 91. **No client-defined memory authority.** Memory requests cannot contain tenant, user, owner,
     department, visibility, classification, or effective grants. The server derives them from the
     current database context and authorized sources.
@@ -316,3 +319,18 @@ OpenRouter Vertex Perception, typed-catalog Decision, and grounded finalization 
 - Unknown/foreign run IDs return one generic not-found response.
 
 Release gates are immutable in code: cross-tenant denial, cross-department denial, memory isolation, calculation exactness, and factual citation presence require 100%; Recall@5, citation support precision, and abstention correctness require at least 90%.
+
+## Response-mode invariants
+
+- Only `fast`, `auto`, and `deep` are accepted; Auto is the default. Unknown modes and client model,
+  provider, route, scope, fallback, reasoning, and token controls fail strict validation.
+- Authorization, lifecycle, memory, evidence, capabilities, and limits precede generation and cannot
+  be changed by mode. Prompt/document/memory instructions to select a model are inert.
+- Fast uses the simple model only for host-classified `SIMPLE_LOW_RISK`. All other authorized Fast
+  work returns `deep_mode_required` with no content, provider call, or persisted turn.
+- Fast agent rejection precedes Perception, Decision, MCP, and tools. Auto/Deep agent work uses the
+  heavy model. Deep denial/no-evidence still makes zero model calls.
+- Deep reruns use the same authorization-filtered retrieval path; mode changes model selection, not
+  the evidence set.
+- Logs, traces, and responses contain safe enum/usage metadata only—never prompts, provider bodies,
+  authorization details, unrestricted evidence, keys, or hidden reasoning.

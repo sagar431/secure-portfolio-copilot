@@ -147,3 +147,119 @@ async def test_conversations_are_owner_scoped_and_restricted_targets_abstain(
         "REQUEST_SCOPE_NOT_AUTHORIZED",
         "REQUEST_SCOPE_NOT_AUTHORIZED",
     ]
+    assert all(item.model_name == "NO_MODEL_CALL" for item in traces)
+    assert all(item.route_reason_code == "NO_MODEL_CALL" for item in traces)
+
+
+@pytest.mark.asyncio
+async def test_response_mode_api_routes_safely_and_fast_upgrade_does_not_persist(
+    auth_harness: AuthHarness,
+) -> None:
+    auth_harness.settings.router_low_confidence_threshold = 0.0
+    nora = await _login(auth_harness.client, "nora@example.com")
+    alice = await _login(auth_harness.client, "alice@example.com")
+    await _upload_and_approve(
+        auth_harness.client,
+        nora,
+        relative_path="orion/finance/Orion_FY2025_Board_Pack.pdf",
+        media_type="application/pdf",
+        metadata=_metadata(
+            workspace="orion",
+            department="finance",
+            document_type="FINANCIAL_REPORT",
+            reporting_period="FY2025",
+        ),
+        idempotency_key="chat-response-modes-0001",
+    )
+    conversation = await _create_conversation(auth_harness, alice, "Response modes")
+    path = f"/api/conversations/{conversation['id']}/messages"
+    headers = {"Authorization": f"Bearer {alice}"}
+    simple_question = "What was Orion revenue in FY2025?"
+
+    automatic = await auth_harness.client.post(
+        path, headers=headers, json={"content": simple_question}
+    )
+    assert automatic.status_code == 200, automatic.text
+    automatic_data = automatic.json()["data"]
+    assert automatic_data["requested_response_mode"] == "auto"
+    assert automatic_data["resolved_response_mode"] == "fast"
+    assert automatic_data["route_reason"] == "SIMPLE_LOW_RISK"
+
+    deep = await auth_harness.client.post(
+        path,
+        headers=headers,
+        json={"content": simple_question, "response_mode": "deep"},
+    )
+    assert deep.status_code == 200, deep.text
+    deep_data = deep.json()["data"]
+    assert deep_data["requested_response_mode"] == "deep"
+    assert deep_data["resolved_response_mode"] == "deep"
+    assert deep_data["route_reason"] == "USER_REQUESTED_DEEP"
+    assert [item["chunk_id"] for item in automatic_data["citations"]] == [
+        item["chunk_id"] for item in deep_data["citations"]
+    ]
+
+    async with auth_harness.session_factory() as session:
+        before_rejection = len(
+            (
+                await session.execute(
+                    select(Message).where(Message.conversation_id == UUID(conversation["id"]))
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    rejected = await auth_harness.client.post(
+        path,
+        headers=headers,
+        json={
+            "content": "Compare Orion revenue across reporting periods.",
+            "response_mode": "fast",
+        },
+    )
+    assert rejected.status_code == 409
+    assert rejected.json()["error"] == {
+        "code": "deep_mode_required",
+        "message": "This request requires broader analysis.",
+    }
+    assert "Orion revenue" not in rejected.text
+
+    async with auth_harness.session_factory() as session:
+        after_rejection = len(
+            (
+                await session.execute(
+                    select(Message).where(Message.conversation_id == UUID(conversation["id"]))
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert after_rejection == before_rejection
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "forged",
+    [
+        {"response_mode": "turbo"},
+        {"model": "google/gemini-3.7-flash"},
+        {"provider": "google-vertex"},
+        {"route_reason": "USER_REQUESTED_DEEP"},
+        {"tenant_id": "forged"},
+    ],
+)
+async def test_response_mode_api_rejects_unknown_and_forged_controls(
+    auth_harness: AuthHarness, forged: dict[str, str]
+) -> None:
+    alice = await _login(auth_harness.client, "alice@example.com")
+    conversation = await _create_conversation(auth_harness, alice, "Strict modes")
+
+    response = await auth_harness.client.post(
+        f"/api/conversations/{conversation['id']}/messages",
+        headers={"Authorization": f"Bearer {alice}"},
+        json={"content": "What was revenue?", **forged},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"

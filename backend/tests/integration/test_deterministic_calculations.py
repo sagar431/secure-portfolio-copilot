@@ -3,6 +3,10 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
+from app.auth.repository import build_authorization_context, get_user_by_email
+from app.mcp_gateway.adapters import CalculateEbitdaMarginAdapter
+from app.mcp_gateway.contracts import CalculateFinancialMetricInput, CalculationPayload
+from app.mcp_gateway.errors import ToolAuthorizationError
 from app.models.documents import ParsedCell, ParsedRow, ParsedSheet
 from tests.conftest import AuthHarness
 from tests.integration.test_authorized_search import (
@@ -81,6 +85,43 @@ async def test_three_calculator_tools_return_host_computed_results_and_citations
             for item in payload["trace"]
         )
         assert not any(item["reason_code"] == "FINALIZATION_STARTED" for item in payload["trace"])
+
+
+@pytest.mark.asyncio
+async def test_calculator_resolves_unique_authorized_workspace_alias_to_canonical_company(
+    auth_harness: AuthHarness,
+) -> None:
+    await _prepare_orion_workbook(auth_harness)
+
+    async with auth_harness.session_factory() as session:
+        alice = await get_user_by_email(session, "alice@example.com")
+        assert alice is not None
+        context = build_authorization_context(alice)
+        assert context is not None
+
+        payload = await CalculateEbitdaMarginAdapter(session).invoke(
+            arguments=CalculateFinancialMetricInput(
+                company_slug="orion",
+                reporting_period="FY2025",
+            ),
+            authorization_scope=context.scope,
+            request_id="calculation-authorized-alias",
+        )
+        with pytest.raises(ToolAuthorizationError):
+            await CalculateEbitdaMarginAdapter(session).invoke(
+                arguments=CalculateFinancialMetricInput(
+                    company_slug="atlas",
+                    reporting_period="FY2025",
+                ),
+                authorization_scope=context.scope,
+                request_id="calculation-unauthorized-alias",
+            )
+
+    assert isinstance(payload, CalculationPayload)
+    assert len(payload.calculations) == 1
+    calculation = payload.calculations[0]
+    assert calculation.company_slug == "orion-main"
+    assert calculation.result == 10.0
 
 
 @pytest.mark.asyncio

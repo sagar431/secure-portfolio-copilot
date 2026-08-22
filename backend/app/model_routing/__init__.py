@@ -2,6 +2,7 @@
 
 from app.model_routing.policy import (
     ModelRoute,
+    ResponseMode,
     RouteReason,
     RoutingDecision,
     RoutingSignals,
@@ -11,6 +12,7 @@ from app.model_routing.policy import (
 
 __all__ = [
     "ModelRoute",
+    "ResponseMode",
     "RouteReason",
     "RoutingDecision",
     "RoutingSignals",

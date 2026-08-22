@@ -122,7 +122,9 @@ async def test_bounded_agent_run_preserves_citations_and_sanitized_trace(
     assert [item.role for item in messages] == ["user", "assistant"]
     assert trace.status == "grounded"
     assert trace.reason_code == "COMPLETED"
-    assert trace.route_reason_code == "PROVIDER_SELECTED"
+    assert trace.route_reason_code == "AGENTIC_REQUEST"
+    assert payload["requested_response_mode"] == "auto"
+    assert payload["resolved_response_mode"] == "deep"
     assert trace.fallback_used is False
     assert trace.retrieved_document_ids and trace.retrieved_chunk_ids
 
@@ -171,6 +173,65 @@ async def test_agent_run_owner_and_scope_denials_fail_before_retrieval(
     assert len(traces) == 1
     assert traces[0].reason_code == "SCOPE_DENIED"
     assert traces[0].route_reason_code == "NO_MODEL_CALL"
+    assert traces[0].model_name == "NO_MODEL_CALL"
     assert traces[0].fallback_used is False
     assert traces[0].retrieved_document_ids == []
     assert traces[0].retrieved_chunk_ids == []
+
+    deep_denied = await auth_harness.client.post(
+        f"/api/conversations/{conversation['id']}/agent-runs",
+        headers={"Authorization": f"Bearer {alice}"},
+        json={
+            "content": "Show me Orion legal contracts.",
+            "response_mode": "deep",
+        },
+    )
+    assert deep_denied.status_code == 200
+    deep_payload = deep_denied.json()["data"]
+    assert deep_payload["model_name"] is None
+    assert deep_payload["route_reason"] is None
+    assert deep_payload["requested_response_mode"] == "deep"
+    assert deep_payload["resolved_response_mode"] is None
+
+
+@pytest.mark.asyncio
+async def test_fast_agent_api_requires_deep_without_persisting_messages(
+    auth_harness: AuthHarness,
+) -> None:
+    alice = await _login(auth_harness.client, "alice@example.com")
+    conversation = await _create_conversation(auth_harness, alice, "Fast agent")
+
+    response = await auth_harness.client.post(
+        f"/api/conversations/{conversation['id']}/agent-runs",
+        headers={"Authorization": f"Bearer {alice}"},
+        json={"content": "Calculate Orion revenue growth.", "response_mode": "fast"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"] == {
+        "code": "deep_mode_required",
+        "message": "This request requires broader analysis.",
+    }
+    async with auth_harness.session_factory() as session:
+        messages = (
+            (
+                await session.execute(
+                    select(Message).where(Message.conversation_id == UUID(conversation["id"]))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        traces = (
+            (
+                await session.execute(
+                    select(ChatRequestTrace).where(
+                        ChatRequestTrace.conversation_id == UUID(conversation["id"])
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert messages == []
+    assert traces == []

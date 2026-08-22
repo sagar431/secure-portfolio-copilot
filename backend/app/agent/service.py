@@ -18,6 +18,7 @@ from app.chat.scope_guard import request_matches_authorized_scope, resolve_home_
 from app.core.errors import APIError
 from app.mcp_gateway.contracts import APPROVED_TOOL_NAMES
 from app.mcp_gateway.gateway import ApprovedToolGateway
+from app.model_routing import ResponseMode, RoutingSignals, WorkloadKind, route_model
 from app.models.identity import Capability
 from app.policies.models import AuthorizationContext
 from app.schemas.chat import AgentRunMessageData, AgentTraceEventData, safe_model_name
@@ -37,12 +38,14 @@ class AgentRunService:
         *,
         model_name: str,
         route_reason_code: str,
+        low_confidence_threshold: float = 0.55,
     ) -> None:
         self._session = session
         self._loop = loop
         self._gateway = gateway
         self._model_name = model_name
         self._route_reason_code = route_reason_code
+        self._low_confidence_threshold = low_confidence_threshold
 
     @staticmethod
     def _scope_denied_outcome() -> AgentRunOutcome:
@@ -97,6 +100,7 @@ class AgentRunService:
         *,
         conversation_id: UUID,
         question: str,
+        response_mode: ResponseMode = ResponseMode.AUTO,
         request_id: str,
     ) -> AgentRunMessageData:
         started = time.monotonic()
@@ -114,19 +118,40 @@ class AgentRunService:
         ):
             raise APIError(403, "forbidden", "Agent document access is not permitted.")
 
-        user_message = await add_message(
-            self._session,
-            conversation=conversation,
-            user_id=context.identity.user_id,
-            role="user",
-            content=question,
-            request_id=request_id,
-        )
         route_reason_code = "NO_MODEL_CALL"
+        resolved_response_mode: ResponseMode | None = None
         if not request_matches_authorized_scope(context, question):
+            user_message = await add_message(
+                self._session,
+                conversation=conversation,
+                user_id=context.identity.user_id,
+                role="user",
+                content=question,
+                request_id=request_id,
+            )
             outcome = self._scope_denied_outcome()
         else:
-            route_reason_code = self._route_reason_code
+            routing_decision = route_model(
+                RoutingSignals(WorkloadKind.AGENTIC, question, 0, None),
+                low_confidence_threshold=self._low_confidence_threshold,
+                response_mode=response_mode,
+            )
+            if routing_decision.upgrade_required:
+                raise APIError(
+                    409,
+                    "deep_mode_required",
+                    "This request requires broader analysis.",
+                )
+            route_reason_code = routing_decision.reason.value
+            resolved_response_mode = routing_decision.resolved_response_mode
+            user_message = await add_message(
+                self._session,
+                conversation=conversation,
+                user_id=context.identity.user_id,
+                role="user",
+                content=question,
+                request_id=request_id,
+            )
             permitted_tool_catalog = self._gateway.permitted_catalog(
                 context.scope, APPROVED_TOOL_NAMES
             )
@@ -160,7 +185,9 @@ class AgentRunService:
             request_id=request_id,
             conversation=conversation,
             user_id=context.identity.user_id,
-            model_name=self._model_name,
+            model_name=(
+                self._model_name if route_reason_code != "NO_MODEL_CALL" else "NO_MODEL_CALL"
+            ),
             status=trace_status,
             reason_code=outcome.stopping_reason.value.upper(),
             document_ids=tuple(dict.fromkeys(item.document_id for item in outcome.citations)),
@@ -209,4 +236,6 @@ class AgentRunService:
                 safe_model_name(self._model_name) if route_reason_code != "NO_MODEL_CALL" else None
             ),
             route_reason=(route_reason_code if route_reason_code != "NO_MODEL_CALL" else None),
+            requested_response_mode=response_mode,
+            resolved_response_mode=resolved_response_mode,
         )

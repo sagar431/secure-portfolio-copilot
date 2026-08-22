@@ -131,11 +131,18 @@ describe('ChatPage', () => {
         conversationData.id,
         'Why did margin improve?',
         expect.any(AbortSignal),
+        'auto',
       ),
     )
     expect(screen.getByText(groundedAnswerData.answer)).toBeInTheDocument()
+    const routeDetails = screen.getByLabelText('Response route details')
+    expect(within(routeDetails).getByText('Auto')).toBeInTheDocument()
+    expect(within(routeDetails).getByText('Fast')).toBeInTheDocument()
     expect(
-      screen.getByText('Model route: Gemini 3.1 Flash Lite'),
+      within(routeDetails).getByText('Gemini 3.1 Flash Lite'),
+    ).toBeInTheDocument()
+    expect(
+      within(routeDetails).getByText('Simple high-confidence evidence'),
     ).toBeInTheDocument()
     expect(
       screen.queryByText(/google-vertex|openrouter/i),
@@ -174,6 +181,7 @@ describe('ChatPage', () => {
         conversationData.id,
         'Use the approved document tools.',
         expect.any(AbortSignal),
+        'auto',
       ),
     )
     expect(chatApi.sendConversationMessage).not.toHaveBeenCalled()
@@ -262,6 +270,7 @@ describe('ChatPage', () => {
       conversationData.id,
       'Why did margin improve?',
       expect.any(AbortSignal),
+      'auto',
     )
   })
 
@@ -285,6 +294,7 @@ describe('ChatPage', () => {
         /Retrieving authorized evidence and validating citations/,
       ),
     ).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /Auto/ })).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: 'Cancel response' }))
 
     expect(await screen.findByText('Request canceled')).toBeInTheDocument()
@@ -375,5 +385,110 @@ describe('ChatPage', () => {
       'Enter a question before asking the copilot.',
     )
     expect(chatApi.sendConversationMessage).not.toHaveBeenCalled()
+  })
+
+  it('defaults to Auto and sends the user-selected response mode', async () => {
+    vi.mocked(chatApi.sendConversationMessage).mockResolvedValueOnce({
+      data: {
+        ...groundedAnswerData,
+        requested_response_mode: 'deep',
+        resolved_response_mode: 'deep',
+        model_name: 'Gemini 3.7 Flash',
+        route_reason: 'USER_REQUESTED_DEEP',
+      },
+      request_id: 'deep-answer-request',
+    })
+    renderPage()
+    await screen.findByRole('heading', { name: 'Orion finance review' })
+    const responseModeGroup = screen.getByRole('group', {
+      name: 'Response mode',
+    })
+    const modeRadios = within(responseModeGroup).getAllByRole('radio')
+    expect(modeRadios).toHaveLength(3)
+    expect(
+      modeRadios.every(
+        (radio) => radio.getAttribute('name') === 'response-mode',
+      ),
+    ).toBe(true)
+    expect(
+      within(responseModeGroup).getByRole('radio', { name: /Auto/ }),
+    ).toBeChecked()
+
+    fireEvent.click(
+      within(responseModeGroup).getByRole('radio', { name: /Deep/ }),
+    )
+    submitQuestion()
+
+    await waitFor(() =>
+      expect(chatApi.sendConversationMessage).toHaveBeenCalledWith(
+        'signed-alice-token',
+        conversationData.id,
+        'Why did margin improve?',
+        expect.any(AbortSignal),
+        'deep',
+      ),
+    )
+    const routeDetails = await screen.findByLabelText('Response route details')
+    expect(within(routeDetails).getAllByText('Deep')).toHaveLength(2)
+    expect(
+      within(routeDetails).getByText('Gemini 3.7 Flash'),
+    ).toBeInTheDocument()
+    expect(
+      within(routeDetails).getByText('User explicitly requested Deep'),
+    ).toBeInTheDocument()
+  })
+
+  it('renders a safe Fast upgrade card and resubmits only after Continue with Deep', async () => {
+    vi.mocked(chatApi.sendConversationMessage).mockRejectedValueOnce(
+      new ApiError(
+        'provider details must not be rendered',
+        409,
+        'deep_mode_required',
+        'upgrade-request',
+      ),
+    )
+    renderPage()
+    await screen.findByRole('heading', { name: 'Orion finance review' })
+    fireEvent.click(screen.getByRole('radio', { name: /Fast/ }))
+    submitQuestion('  Compare Orion revenue across documents.  ')
+
+    expect(
+      await screen.findByRole('heading', {
+        name: 'This request needs Deep mode because it requires broader analysis.',
+      }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/provider details/)).not.toBeInTheDocument()
+    expect(chatApi.sendConversationMessage).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue with Deep' }))
+
+    await waitFor(() =>
+      expect(chatApi.sendConversationMessage).toHaveBeenLastCalledWith(
+        'signed-alice-token',
+        conversationData.id,
+        'Compare Orion revenue across documents.',
+        expect.any(AbortSignal),
+        'deep',
+      ),
+    )
+    expect(chatApi.sendConversationMessage).toHaveBeenCalledTimes(2)
+  })
+
+  it('cancels a Fast upgrade without making another request', async () => {
+    vi.mocked(chatApi.sendConversationMessage).mockRejectedValueOnce(
+      new ApiError('safe', 409, 'deep_mode_required', 'upgrade-request'),
+    )
+    renderPage()
+    await screen.findByRole('heading', { name: 'Orion finance review' })
+    fireEvent.click(screen.getByRole('radio', { name: /Fast/ }))
+    submitQuestion('Compare Orion revenue.')
+    await screen.findByRole('button', { name: 'Continue with Deep' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(
+      screen.queryByRole('button', { name: 'Continue with Deep' }),
+    ).not.toBeInTheDocument()
+    expect(chatApi.sendConversationMessage).toHaveBeenCalledTimes(1)
   })
 })
