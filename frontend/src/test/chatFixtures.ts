@@ -16,6 +16,7 @@ export const groundedAnswerData: GroundedAnswerData = {
   user_message_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
   assistant_message_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
   status: 'grounded',
+  intent_route: 'DOCUMENT_QUESTION',
   answer: 'Operating margin improved. <script>window.unsafe = true</script>',
   claims: [
     {
@@ -52,6 +53,7 @@ export const groundedAnswerData: GroundedAnswerData = {
   latency_ms: 2100,
   estimated_model_cost_usd: null,
   pricing_snapshot_date: null,
+  memory_notifications: [],
 }
 
 export const insufficientAnswerData: GroundedAnswerData = {
@@ -59,6 +61,7 @@ export const insufficientAnswerData: GroundedAnswerData = {
   user_message_id: '11111111-1111-4111-8111-111111111111',
   assistant_message_id: '22222222-2222-4222-8222-222222222222',
   status: 'insufficient_evidence',
+  intent_route: 'DOCUMENT_QUESTION',
   answer: 'The authorized documents do not contain enough evidence to answer.',
   claims: [],
   citations: [],
@@ -73,6 +76,7 @@ export const insufficientAnswerData: GroundedAnswerData = {
   latency_ms: 12,
   estimated_model_cost_usd: null,
   pricing_snapshot_date: null,
+  memory_notifications: [],
 }
 
 export const agentRunData: AgentRunData = {
@@ -96,6 +100,14 @@ export const agentRunData: AgentRunData = {
   step_count: 1,
   replan_count: 0,
   retry_count: 0,
+  selected_intent: 'financial_lookup',
+  policy_decision: 'ALLOWED',
+  tool_shortlist: [
+    'portfolio.search_authorized_documents',
+    'portfolio.get_document_excerpt',
+  ],
+  plan_version: 1,
+  evidence_advanced_goal: true,
   trace: [
     {
       event_id: '45454545-4545-4454-8454-454545454545',

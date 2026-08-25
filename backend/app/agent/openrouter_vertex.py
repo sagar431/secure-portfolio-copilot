@@ -19,6 +19,7 @@ from app.agent.prompts import (
     step_result_perception_prompt,
     user_query_perception_prompt,
 )
+from app.chat.contracts import GroundedAgentContext
 from app.mcp_gateway.contracts import PermittedToolDescriptor
 from app.openrouter_vertex import (
     OpenRouterErrorCode,
@@ -82,13 +83,19 @@ class OpenRouterVertexPerceptionProvider:
             client=client,
             system_instruction=PERCEPTION_SYSTEM_INSTRUCTION,
         )
+        self._context = GroundedAgentContext()
+
+    def bind_request_context(self, context: GroundedAgentContext) -> None:
+        self._context = context
 
     @property
     def model_name(self) -> str:
         return self._stage.model_name
 
     async def perceive_user_query(self, *, query: str) -> PerceptionSnapshot:
-        return await self._stage.generate(user_query_perception_prompt(query), PerceptionSnapshot)
+        return await self._stage.generate(
+            user_query_perception_prompt(query, self._context), PerceptionSnapshot
+        )
 
     async def perceive_step_result(
         self,
@@ -108,6 +115,7 @@ class OpenRouterVertexPerceptionProvider:
                 completed_steps,
                 observation,
                 remaining_budgets,
+                self._context,
             ),
             PerceptionSnapshot,
         )
@@ -126,6 +134,10 @@ class OpenRouterVertexDecisionProvider:
             client=client,
             system_instruction=DECISION_SYSTEM_INSTRUCTION,
         )
+        self._context = GroundedAgentContext()
+
+    def bind_request_context(self, context: GroundedAgentContext) -> None:
+        self._context = context
 
     @property
     def model_name(self) -> str:
@@ -139,7 +151,8 @@ class OpenRouterVertexDecisionProvider:
         permitted_tool_catalog: tuple[PermittedToolDescriptor, ...],
     ) -> DecisionResult:
         return await self._stage.generate(
-            initial_decision_prompt(query, perception, permitted_tool_catalog), DecisionResult
+            initial_decision_prompt(query, perception, permitted_tool_catalog, self._context),
+            DecisionResult,
         )
 
     async def decide_mid_session(
@@ -158,6 +171,7 @@ class OpenRouterVertexDecisionProvider:
                 current_plan,
                 completed_steps,
                 permitted_tool_catalog,
+                self._context,
             ),
             DecisionResult,
         )

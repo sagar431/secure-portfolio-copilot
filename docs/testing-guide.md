@@ -1,9 +1,74 @@
-# Step 9 + Interview Features Testing Guide
+# Secure Portfolio Copilot Testing Guide
 
 Run commands from the locations shown. Tests use only synthetic identities and an isolated tmpfs
-PostgreSQL test service. On 2026-08-21 these commands passed with 302 backend tests and 98
+PostgreSQL test service. On 2026-08-23 the current gate passed with 447 backend tests and 135
 frontend tests. Automated tests configure deterministic fake embedding, LLM, Perception, Decision,
-and MCP adapters and require neither Ollama, a live model provider, a provider key, nor network access.
+summarization, memory extraction, and MCP adapters and require no live model or external credential.
+Older step-labelled sections remain useful focused references; this section is authoritative for
+the current head.
+
+## Current complete quality gate
+
+```bash
+docker compose --profile test up -d test-db
+
+cd backend
+UV_CACHE_DIR=/tmp/secure-portfolio-uv-cache uv run ruff format --check app tests alembic
+UV_CACHE_DIR=/tmp/secure-portfolio-uv-cache uv run ruff check app tests alembic
+UV_CACHE_DIR=/tmp/secure-portfolio-uv-cache uv run mypy app
+TEST_DATABASE_URL=postgresql+asyncpg://portfolio:portfolio_test@127.0.0.1:5433/portfolio_test \
+  UV_CACHE_DIR=/tmp/secure-portfolio-uv-cache uv run pytest -q
+
+cd ../frontend
+npm run format:check
+npm run lint
+npm run typecheck
+npm test -- --run
+npm run build
+
+cd ..
+git diff --check
+```
+
+The backend suite covers the eight intent routes; automatic semantic, episodic, summary, and
+working memory; source revocation and user/tenant isolation; all eleven MCP tools; deterministic
+financial arithmetic; bounded retry/replan/terminal behavior; strict validated streaming,
+cancellation, one bounded same-ID reconnect, replay idempotency, citation order, and
+persisted-result equality. It also covers deterministic-first explicit preference extraction and
+prior-goal recovery for a currently regrounded episodic continuation. The frontend suite
+covers persisted histories, compact layout states, streaming, Stop, citations, memory notices,
+collapsed trace/details, approval controls, keyboard behavior, and responsive selectors.
+
+## Current migration gate
+
+Use a dedicated disposable database. Upgrade to `20260822_0011`, then for each of
+`20260823_0012`, `20260823_0013`, `20260823_0014`, and `20260823_0015`: upgrade, downgrade to its
+parent, and re-upgrade. Finish with:
+
+```bash
+DATABASE_URL='<dedicated asyncpg migration database>' uv run alembic upgrade head
+DATABASE_URL='<dedicated asyncpg migration database>' uv run alembic check
+DATABASE_URL='<dedicated asyncpg migration database>' uv run alembic current
+```
+
+Expected current revision: `20260823_0015 (head)`, with `No new upgrade operations detected`.
+
+## Live-model quality evaluation (explicit opt-in)
+
+Normal tests never invoke this command. With the local ignored environment configured for the
+pinned OpenRouter Vertex provider and an approved key:
+
+```bash
+cd backend
+RUN_LIVE_MODEL_EVAL=1 LLM_PROVIDER=openrouter_vertex \
+  UV_CACHE_DIR=/tmp/secure-portfolio-uv-cache uv run python -m app.scripts.live_agent_quality_eval
+```
+
+It checks intent, Perception, tool choice, query rewrite, replan, goal progress, stopping, citation
+faithfulness, memory-candidate quality, and summary quality. Output is content-free pass/fail labels;
+it never prints a key, prompt, completion, evidence, memory content, or reasoning.
+The 2026-08-23 configured-provider run passed all ten checks. Treat that result as supplementary
+semantic evidence because live-provider behavior is not deterministic.
 
 ## Focused deterministic router checks
 
@@ -544,9 +609,9 @@ refresh.
 - Chat returns `llm_unavailable`/HTTP 503: confirm the ignored `.env` selects OpenRouter and has a local
   key, then rerun only the content-free synthetic provider smoke. The service intentionally has no
   partial answer or alternate ungrounded fallback.
-- A conversation remains after reload but its transcript is empty: this is the honest Step 6 API
-  limitation. Conversation/message persistence exists, but message-history retrieval and memory do
-  not.
+- A conversation remains after reload but older transcript entries are absent: confirm ownership
+  and the bounded 100-message history response. The UI intentionally does not paginate beyond that
+  current window and does not reconstruct old expandable citation cards.
 - An agent run ends `limit_reached`: inspect only the safe stopping reason (`max_steps`,
   `max_retrieval_rewrites`, `max_replans`, or `duration`). Do not increase bounds to repair a model
   plan; verify the deterministic state transition and authorized evidence path.
@@ -669,7 +734,7 @@ npm test -- --run src/api/agentHistory.test.ts \
   src/pages/AgentHistoryPage.test.tsx src/AgentHistoryRouting.test.tsx
 ```
 
-The required reversible migration gate is:
+The historical approval-only reversible migration gate was:
 
 ```bash
 cd backend
@@ -679,6 +744,9 @@ uv run alembic downgrade 20260822_0010
 uv run alembic upgrade head
 uv run alembic check
 ```
+
+For current release verification use the `0012` through `0015` migration cycle at the top of this
+guide; the historical command alone is insufficient.
 
 Browser acceptance signs in as a query-authorized synthetic user, opens **Agent History**, verifies
 the empty state or newest run, executes a bounded Deep run if needed, reloads history, expands the

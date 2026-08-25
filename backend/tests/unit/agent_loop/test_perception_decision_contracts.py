@@ -32,6 +32,7 @@ from app.agent.prompts import (
 )
 from app.agent.provider_schema import provider_schema
 from app.agent.rule_based_fake import RuleBasedFakeAgentProvider
+from app.chat.contracts import GroundedAgentContext, GroundedMemory, GroundedWorkingMessage
 from app.mcp_gateway.contracts import (
     APPROVED_TOOL_NAMES,
     GetDocumentExcerptInput,
@@ -51,6 +52,12 @@ EXCERPT = "portfolio.get_document_excerpt"
 EBITDA = "portfolio.calculate_ebitda_margin"
 GROWTH = "portfolio.calculate_revenue_growth"
 NET_PROFIT = "portfolio.calculate_net_profit_margin"
+QUERY_METRICS = "portfolio.query_financial_metrics"
+DEBT_TO_EQUITY = "portfolio.calculate_debt_to_equity"
+CASH_RUNWAY = "portfolio.calculate_cash_runway"
+CAGR = "portfolio.calculate_cagr"
+SEARCH_MEMORY = "portfolio.search_memory"
+PROPOSE_MEMORY = "portfolio.propose_memory"
 
 
 def _scope() -> AuthorizationScope:
@@ -172,11 +179,49 @@ def test_step_result_prompt_contains_only_required_state_and_safe_budgets() -> N
         "immutable_completed_step_history",
         "latest_untrusted_structured_observation",
         "safe_remaining_budgets",
+        "authorized_untrusted_memory",
+        "recent_conversation_untrusted",
+        "conversation_summary_untrusted",
     }
     serialized = json.dumps(decoded)
     for forbidden in ("authorization_scope", "user_id", "tenant_id", "api_key", "raw_error"):
         assert forbidden not in serialized
     assert "untrusted data" in PERCEPTION_SYSTEM_INSTRUCTION.casefold()
+    assert "global_goal_status" in PERCEPTION_SYSTEM_INSTRUCTION
+    assert "complete user request" in PERCEPTION_SYSTEM_INSTRUCTION
+    assert "another" in PERCEPTION_SYSTEM_INSTRUCTION
+    assert "calculation step is still required" in PERCEPTION_SYSTEM_INSTRUCTION
+
+
+def test_agent_prompts_receive_only_bounded_untrusted_working_and_durable_context() -> None:
+    context = GroundedAgentContext(
+        memories=tuple(
+            GroundedMemory(
+                memory_id=uuid4(),
+                scope="PRIVATE_USER",
+                memory_type="SEMANTIC",
+                content=f"preference {index}",
+            )
+            for index in range(7)
+        ),
+        recent_messages=tuple(
+            GroundedWorkingMessage(role="user", content=f"turn {index}") for index in range(11)
+        ),
+        conversation_summary="Earlier authorized work remained unresolved.",
+    )
+    catalog = ApprovedToolGateway.permitted_catalog(_scope(), APPROVED_TOOL_NAMES)
+    decoded = json.loads(
+        initial_decision_prompt("Synthetic question", _perception(), catalog, context)
+    )
+
+    assert len(decoded["authorized_untrusted_memory"]) == 5
+    assert [item["quoted_text"] for item in decoded["recent_conversation_untrusted"]] == [
+        f"turn {index}" for index in range(3, 11)
+    ]
+    assert decoded["conversation_summary_untrusted"] == context.conversation_summary
+    serialized = json.dumps(decoded)
+    for forbidden in ("authorization_scope", "user_id", "tenant_id", "api_key"):
+        assert forbidden not in serialized
 
 
 @pytest.mark.parametrize(
@@ -222,6 +267,12 @@ def test_decision_receives_exact_sanitized_manifest_catalog() -> None:
         EBITDA,
         GROWTH,
         NET_PROFIT,
+        QUERY_METRICS,
+        DEBT_TO_EQUITY,
+        CASH_RUNWAY,
+        CAGR,
+        SEARCH_MEMORY,
+        PROPOSE_MEMORY,
     ]
     assert [field["name"] for field in descriptors[0]["input_schema"]["fields"]] == [
         "query",
@@ -231,11 +282,28 @@ def test_decision_receives_exact_sanitized_manifest_catalog() -> None:
         "document_id",
         "chunk_id",
     ]
-    for descriptor in descriptors[2:]:
+    for descriptor in (
+        descriptors[2],
+        descriptors[3],
+        descriptors[4],
+        descriptors[6],
+        descriptors[7],
+    ):
         assert [field["name"] for field in descriptor["input_schema"]["fields"]] == [
             "company_slug",
             "reporting_period",
         ]
+    assert [field["name"] for field in descriptors[5]["input_schema"]["fields"]] == [
+        "company_slug",
+        "reporting_period",
+        "metric",
+    ]
+    assert [field["name"] for field in descriptors[8]["input_schema"]["fields"]] == [
+        "company_slug",
+        "start_period",
+        "end_period",
+        "metric",
+    ]
     serialized = json.dumps(descriptors)
     for forbidden in ("tenant", "user_id", "role", "department", "sql", "path", "api_key"):
         assert forbidden not in serialized.casefold()
@@ -269,3 +337,29 @@ def test_tool_actions_reject_the_other_tools_arguments_and_extra_scope() -> None
             },
             strict=True,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("query", "expected_tool"),
+    [
+        ("What was Orion FY2025 revenue?", QUERY_METRICS),
+        ("Calculate Orion FY2025 debt-to-equity", DEBT_TO_EQUITY),
+        ("Calculate Orion FY2025 cash runway", CASH_RUNWAY),
+        ("Calculate Orion revenue CAGR from FY2024 to FY2025", CAGR),
+        ("What did I investigate last time?", SEARCH_MEMORY),
+        ("Remember that I prefer INR crores", PROPOSE_MEMORY),
+    ],
+)
+async def test_portfolio_examples_choose_the_exact_fixed_tool(
+    query: str, expected_tool: str
+) -> None:
+    provider = RuleBasedFakeAgentProvider()
+    perception = await provider.perceive_user_query(query=query)
+    decision = await provider.decide_initial(
+        query=query,
+        perception=perception,
+        permitted_tool_catalog=ApprovedToolGateway.permitted_catalog(_scope(), APPROVED_TOOL_NAMES),
+    )
+
+    assert decision.next_action.action_name == expected_tool

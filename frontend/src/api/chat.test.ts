@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   createConversation,
+  listConversationMessages,
   listConversations,
   runConversationAgent,
   sendConversationMessage,
+  streamConversationMessage,
 } from './chat'
 import { ApiError } from './client'
 import {
@@ -64,6 +66,27 @@ describe('conversation API', () => {
     })
   })
 
+  it('loads a bounded strict persisted conversation history', async () => {
+    const message = {
+      id: '94949494-9494-4494-8494-949494949494',
+      role: 'user' as const,
+      content: 'What was Orion revenue?',
+      created_at: '2026-08-23T12:00:00Z',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: { messages: [message], has_more: false },
+        request_id: 'history-request',
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      listConversationMessages('signed-token', conversationData.id),
+    ).resolves.toMatchObject({ data: { messages: [message] } })
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/messages?limit=100')
+  })
+
   it('posts only normalized content and accepts a validated grounded answer', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({
@@ -92,6 +115,152 @@ describe('conversation API', () => {
       content: 'Why did margin improve?',
       response_mode: 'auto',
     })
+  })
+
+  it('parses strict NDJSON progress and sends a stable client message identifier', async () => {
+    const clientMessageId = '95959595-9595-4595-8595-959595959595'
+    const lines = [
+      { type: 'message.started' },
+      { type: 'route.selected', intent: 'DOCUMENT_QUESTION' },
+      { type: 'answer.delta', delta: groundedAnswerData.answer },
+      { type: 'message.completed', result: groundedAnswerData },
+    ]
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            lines.map((item) => JSON.stringify(item)).join('\n') + '\n',
+          ),
+        )
+        controller.close()
+      },
+    })
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'application/x-ndjson' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const progress = vi.fn()
+
+    await expect(
+      streamConversationMessage(
+        'signed-token',
+        conversationData.id,
+        'Hello',
+        progress,
+        undefined,
+        'auto',
+        clientMessageId,
+      ),
+    ).resolves.toEqual(groundedAnswerData)
+    const options = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(typeof options.body).toBe('string')
+    expect(JSON.parse(options.body as string)).toEqual({
+      content: 'Hello',
+      response_mode: 'auto',
+      client_message_id: clientMessageId,
+    })
+    expect(progress).toHaveBeenCalledTimes(3)
+  })
+
+  it('reconnects once with the same idempotency key after a transport failure', async () => {
+    const clientMessageId = '94949494-9494-4494-8494-949494949494'
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            [
+              { type: 'message.started' },
+              { type: 'route.selected', intent: 'CASUAL' },
+              { type: 'answer.delta', delta: groundedAnswerData.answer },
+              { type: 'message.completed', result: groundedAnswerData },
+            ]
+              .map((item) => JSON.stringify(item))
+              .join('\n') + '\n',
+          ),
+        )
+        controller.close()
+      },
+    })
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('connection dropped'))
+      .mockResolvedValueOnce(new Response(stream, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      streamConversationMessage(
+        'signed-token',
+        conversationData.id,
+        'Hello',
+        vi.fn(),
+        undefined,
+        'auto',
+        clientMessageId,
+      ),
+    ).resolves.toEqual(groundedAnswerData)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const requestBodies = fetchMock.mock.calls.map((call) => {
+      const options = call[1] as RequestInit
+      expect(typeof options.body).toBe('string')
+      return JSON.parse(options.body as string) as unknown
+    })
+    expect(requestBodies).toEqual([
+      {
+        content: 'Hello',
+        response_mode: 'auto',
+        client_message_id: clientMessageId,
+      },
+      {
+        content: 'Hello',
+        response_mode: 'auto',
+        client_message_id: clientMessageId,
+      },
+    ])
+  })
+
+  it('never reconnects an explicitly aborted stream', async () => {
+    const abort = new DOMException('private cancellation detail', 'AbortError')
+    const fetchMock = vi.fn().mockRejectedValue(abort)
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      streamConversationMessage(
+        'signed-token',
+        conversationData.id,
+        'Hello',
+        vi.fn(),
+      ),
+    ).rejects.toBe(abort)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects unknown or raw stream events before displaying them', async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            '{"type":"provider.raw","completion":"unvalidated"}\n',
+          ),
+        )
+        controller.close()
+      },
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(stream, { status: 200 })),
+    )
+
+    await expect(
+      streamConversationMessage(
+        'signed-token',
+        conversationData.id,
+        'Question',
+        vi.fn(),
+      ),
+    ).rejects.toMatchObject({ code: 'invalid_response' })
   })
 
   it('accepts the controlled insufficient-evidence response without claims or citations', async () => {

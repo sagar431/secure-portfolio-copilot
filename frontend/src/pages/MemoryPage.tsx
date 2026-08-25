@@ -3,7 +3,9 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { ApiError } from '../api/client'
 import {
   createPrivateMemory,
+  confirmMemory,
   deleteMemory,
+  dismissMemory,
   inspectMemories,
 } from '../api/memory'
 import { useAuth } from '../auth/useAuth'
@@ -86,6 +88,32 @@ export function MemoryPage() {
     try {
       await deleteMemory(token, memory.id)
       setMemories((current) => current.filter((item) => item.id !== memory.id))
+    } catch (reason) {
+      setError(messageFor(reason))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function resolvePending(
+    memory: MemoryData,
+    action: 'confirm' | 'dismiss',
+  ) {
+    if (!token || !memory.can_confirm) return
+    setBusy(true)
+    setError(null)
+    try {
+      if (action === 'confirm') {
+        const response = await confirmMemory(token, memory.id)
+        setMemories((current) =>
+          current.map((item) => (item.id === memory.id ? response.data : item)),
+        )
+      } else {
+        await dismissMemory(token, memory.id)
+        setMemories((current) =>
+          current.filter((item) => item.id !== memory.id),
+        )
+      }
     } catch (reason) {
       setError(messageFor(reason))
     } finally {
@@ -176,46 +204,149 @@ export function MemoryPage() {
         {!busy && memories.length === 0 ? (
           <p className="supporting-copy">No visible, unexpired memories.</p>
         ) : null}
-        <div className="memory-list">
-          {memories.map((memory) => (
-            <article className="memory-item" key={memory.id}>
-              <div className="memory-item-heading">
-                <span className="status-badge">
-                  {memory.scope.replace('_', ' ')}
-                </span>
-                {memory.can_delete ? (
-                  <button
-                    className="danger-text-button text-button"
-                    type="button"
-                    onClick={() => void remove(memory)}
-                    disabled={busy}
-                  >
-                    Delete
-                  </button>
-                ) : null}
+        {(
+          [
+            [
+              'SEMANTIC',
+              'Semantic memories',
+              'Stable preferences and confirmed user choices.',
+            ],
+            [
+              'EPISODIC',
+              'Episodic memories',
+              'Safe run summaries whose document sources are reauthorized before reuse.',
+            ],
+            [
+              'CONVERSATION_SUMMARY',
+              'Working memory',
+              'Bounded recent turns and rolling conversation summaries.',
+            ],
+          ] as const
+        ).map(([type, title, description]) => (
+          <section
+            className="memory-type-section"
+            key={type}
+            aria-label={title}
+          >
+            <div className="section-heading">
+              <div>
+                <h3>{title}</h3>
+                <p className="supporting-copy">{description}</p>
               </div>
-              <p>{memory.content}</p>
-              <dl className="memory-metadata">
-                <div>
-                  <dt>Department</dt>
-                  <dd>{memory.department}</dd>
-                </div>
-                <div>
-                  <dt>Classification</dt>
-                  <dd>{memory.classification}</dd>
-                </div>
-                <div>
-                  <dt>Sources</dt>
-                  <dd>{memory.sources.length}</dd>
-                </div>
-                <div>
-                  <dt>Expires</dt>
-                  <dd>{new Date(memory.expires_at).toLocaleDateString()}</dd>
-                </div>
-              </dl>
-            </article>
-          ))}
-        </div>
+              <strong>
+                {memories.filter((item) => item.memory_type === type).length}
+              </strong>
+            </div>
+            <div className="memory-list">
+              {memories
+                .filter((item) => item.memory_type === type)
+                .map((memory) => (
+                  <article className="memory-item" key={memory.id}>
+                    <div className="memory-item-heading">
+                      <span className="status-badge">
+                        {memory.memory_type.replaceAll('_', ' ')} ·{' '}
+                        {memory.status.replaceAll('_', ' ')}
+                      </span>
+                      <div className="button-row">
+                        {memory.can_confirm ? (
+                          <>
+                            <button
+                              className="text-button"
+                              type="button"
+                              onClick={() =>
+                                void resolvePending(memory, 'confirm')
+                              }
+                              disabled={busy}
+                            >
+                              Confirm
+                            </button>
+                            <button
+                              className="text-button"
+                              type="button"
+                              onClick={() =>
+                                void resolvePending(memory, 'dismiss')
+                              }
+                              disabled={busy}
+                            >
+                              Dismiss
+                            </button>
+                          </>
+                        ) : null}
+                        {memory.can_delete ? (
+                          <button
+                            className="danger-text-button text-button"
+                            type="button"
+                            onClick={() => void remove(memory)}
+                            disabled={busy}
+                          >
+                            Delete
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                    <p>{memory.content}</p>
+                    <dl className="memory-metadata">
+                      <div>
+                        <dt>Owner</dt>
+                        <dd>{memory.owner_display}</dd>
+                      </div>
+                      <div>
+                        <dt>Scope</dt>
+                        <dd>
+                          {memory.tenant_display} · {memory.company_display} ·{' '}
+                          {memory.scope.replaceAll('_', ' ')}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Origin</dt>
+                        <dd>{memory.origin.replaceAll('_', ' ')}</dd>
+                      </div>
+                      <div>
+                        <dt>Created</dt>
+                        <dd>
+                          {new Date(memory.created_at).toLocaleDateString()}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Department</dt>
+                        <dd>{memory.department}</dd>
+                      </div>
+                      <div>
+                        <dt>Classification</dt>
+                        <dd>{memory.classification}</dd>
+                      </div>
+                      <div>
+                        <dt>Sources</dt>
+                        <dd>
+                          {memory.sources.length
+                            ? memory.sources
+                                .map((source) => source.document_name)
+                                .join(', ')
+                            : 'Conversation'}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Source conversation</dt>
+                        <dd>
+                          {memory.source_conversation ?? 'Not applicable'}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Why remembered</dt>
+                        <dd>{memory.reason}</dd>
+                      </div>
+                      <div>
+                        <dt>Expires</dt>
+                        <dd>
+                          {new Date(memory.expires_at).toLocaleDateString()}
+                        </dd>
+                      </div>
+                    </dl>
+                  </article>
+                ))}
+            </div>
+          </section>
+        ))}
       </section>
     </section>
   )

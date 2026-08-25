@@ -1,9 +1,10 @@
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.chat.intent import RequestIntent
 from app.model_routing import ResponseMode
 from app.models.agent_runs import AgentControlMode
 from app.openrouter_vertex import OPENROUTER_HEAVY_MODEL, OPENROUTER_SIMPLE_MODEL
@@ -14,6 +15,30 @@ def _normalize(value: str) -> str:
 
 
 SafeModelName = Literal["Gemini 3.1 Flash Lite", "Gemini 3.7 Flash"]
+SafeAgentPerceptionIntent = Literal[
+    "financial_lookup",
+    "legal_lookup",
+    "cross_domain_analysis",
+    "portfolio_comparison",
+    "calculation_required",
+    "memory_recall",
+    "memory_write",
+    "clarification",
+    "unsupported",
+]
+SafeAgentToolName = Literal[
+    "portfolio.search_authorized_documents",
+    "portfolio.get_document_excerpt",
+    "portfolio.calculate_ebitda_margin",
+    "portfolio.calculate_revenue_growth",
+    "portfolio.calculate_net_profit_margin",
+    "portfolio.query_financial_metrics",
+    "portfolio.calculate_debt_to_equity",
+    "portfolio.calculate_cash_runway",
+    "portfolio.calculate_cagr",
+    "portfolio.search_memory",
+    "portfolio.propose_memory",
+]
 
 
 def safe_model_name(model_name: str) -> SafeModelName | None:
@@ -55,11 +80,24 @@ class ConversationListData(BaseModel):
     conversations: tuple[ConversationData, ...]
 
 
+class ConversationMessageData(BaseModel):
+    id: UUID
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=12000)
+    created_at: datetime
+
+
+class ConversationMessagesData(BaseModel):
+    messages: tuple[ConversationMessageData, ...]
+    has_more: bool
+
+
 class CreateMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     content: str = Field(min_length=1, max_length=1000)
     response_mode: ResponseMode = Field(default=ResponseMode.AUTO, strict=False)
+    client_message_id: Annotated[UUID, Field(strict=False)] | None = None
 
     @field_validator("content")
     @classmethod
@@ -99,7 +137,16 @@ class GroundedMessageData(BaseModel):
     conversation_id: UUID
     user_message_id: UUID
     assistant_message_id: UUID
-    status: Literal["grounded", "insufficient_evidence"]
+    status: Literal[
+        "grounded",
+        "insufficient_evidence",
+        "casual",
+        "memory_recall",
+        "memory_write",
+        "clarification",
+        "refused",
+    ]
+    intent_route: RequestIntent = RequestIntent.DOCUMENT_QUESTION
     answer: str
     claims: tuple[GroundedClaimData, ...]
     citations: tuple[GroundedCitationData, ...]
@@ -114,25 +161,34 @@ class GroundedMessageData(BaseModel):
     latency_ms: int = Field(ge=0)
     estimated_model_cost_usd: str | None = None
     pricing_snapshot_date: str | None = None
+    memory_notifications: tuple[str, ...] = ()
 
 
 class CalculationInputData(BaseModel):
     name: str
     period: str
     value: float
-    unit: Literal["INR crore"]
+    unit: Literal["INR crore", "INR crore/month"]
     citation_id: str
 
 
 class CalculationData(BaseModel):
     calculation_id: UUID
-    metric: Literal["ebitda_margin", "revenue_growth", "net_profit_margin"]
+    metric: Literal[
+        "financial_metric",
+        "ebitda_margin",
+        "revenue_growth",
+        "net_profit_margin",
+        "debt_to_equity",
+        "cash_runway",
+        "cagr",
+    ]
     company_slug: str
     period: str
     formula: str
     trusted_inputs: tuple[CalculationInputData, ...]
     result: float
-    unit: Literal["percent"]
+    unit: Literal["percent", "x", "months", "INR crore"]
     citation_ids: tuple[str, ...]
 
 
@@ -177,6 +233,11 @@ class AgentRunMessageData(BaseModel):
     step_count: int = Field(ge=0)
     replan_count: int = Field(ge=0)
     retry_count: int = Field(ge=0)
+    selected_intent: SafeAgentPerceptionIntent | None
+    policy_decision: Literal["NOT_EVALUATED", "ALLOWED", "DENIED"]
+    tool_shortlist: tuple[SafeAgentToolName, ...] = Field(max_length=11)
+    plan_version: int | None = Field(default=None, ge=1, le=2)
+    evidence_advanced_goal: bool
     trace: tuple[AgentTraceEventData, ...]
     model_name: SafeModelName | None
     route_reason: str | None

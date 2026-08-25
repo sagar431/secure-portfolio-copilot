@@ -50,6 +50,11 @@ async def test_bounded_agent_run_preserves_citations_and_sanitized_trace(
     assert payload["terminal_status"] == "completed"
     assert payload["stopping_reason"] == "completed"
     assert payload["step_count"] == 1
+    assert payload["selected_intent"] == "financial_lookup"
+    assert payload["policy_decision"] == "ALLOWED"
+    assert "portfolio.search_authorized_documents" in payload["tool_shortlist"]
+    assert payload["plan_version"] == 1
+    assert payload["evidence_advanced_goal"] is True
     assert payload["claims"] and payload["citations"]
     citation_ids = {item["citation_id"] for item in payload["citations"]}
     assert {
@@ -128,6 +133,85 @@ async def test_bounded_agent_run_preserves_citations_and_sanitized_trace(
     assert payload["resolved_response_mode"] == "deep"
     assert trace.fallback_used is False
     assert trace.retrieved_document_ids and trace.retrieved_chunk_ids
+
+
+@pytest.mark.asyncio
+async def test_exact_excerpt_request_searches_then_reads_the_authorized_chunk(
+    auth_harness: AuthHarness,
+) -> None:
+    nora = await _login(auth_harness.client, "nora@example.com")
+    alice = await _login(auth_harness.client, "alice@example.com")
+    await _upload_and_approve(
+        auth_harness.client,
+        nora,
+        relative_path="orion/finance/Orion_FY2025_Board_Pack.pdf",
+        media_type="application/pdf",
+        metadata=_metadata(
+            workspace="orion",
+            department="finance",
+            document_type="FINANCIAL_REPORT",
+            reporting_period="FY2025",
+        ),
+        idempotency_key="agent-exact-excerpt-pdf-0001",
+    )
+    conversation = await _create_conversation(auth_harness, alice, "Exact excerpt")
+    response = await auth_harness.client.post(
+        f"/api/conversations/{conversation['id']}/agent-runs",
+        headers={"Authorization": f"Bearer {alice}"},
+        json={"content": "Give me the exact excerpt about Orion Margin Compression."},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()["data"]
+    assert payload["terminal_status"] == "completed"
+    tools = [
+        item["action_name"]
+        for item in payload["trace"]
+        if item["event_type"] == "tool" and item["status"] == "completed"
+    ]
+    assert tools == [
+        "portfolio.search_authorized_documents",
+        "portfolio.get_document_excerpt",
+    ]
+    assert payload["replan_count"] == 1
+    assert payload["citations"]
+
+
+@pytest.mark.asyncio
+async def test_agent_memory_proposal_requires_approval_then_host_policy_persists_private_memory(
+    auth_harness: AuthHarness,
+) -> None:
+    alice = await _login(auth_harness.client, "alice@example.com")
+    conversation = await _create_conversation(auth_harness, alice, "Memory proposal")
+    proposed = await auth_harness.client.post(
+        f"/api/conversations/{conversation['id']}/agent-runs",
+        headers={"Authorization": f"Bearer {alice}"},
+        json={"content": "Remember that I prefer financial values in INR crores."},
+    )
+    assert proposed.status_code == 200, proposed.text
+    pending = proposed.json()["data"]
+    assert pending["outcome"] == "awaiting_approval"
+    assert pending["approval"]["tool_name"] == "portfolio.propose_memory"
+
+    approved = await auth_harness.client.post(
+        f"/api/agent-runs/{pending['agent_session_id']}/approvals/"
+        f"{pending['approval']['approval_id']}/resolve",
+        headers={"Authorization": f"Bearer {alice}"},
+        json={"action": "approve_once"},
+    )
+    assert approved.status_code == 200, approved.text
+    result = approved.json()["data"]
+    assert result["terminal_status"] == "completed"
+    assert result["answer"] == "Private preference remembered"
+
+    memories = await auth_harness.client.get(
+        "/api/memories?memory_type=SEMANTIC&memory_status=ACTIVE",
+        headers={"Authorization": f"Bearer {alice}"},
+    )
+    assert memories.status_code == 200
+    rows = memories.json()["data"]["memories"]
+    assert len(rows) == 1
+    assert rows[0]["scope"] == "PRIVATE_USER"
 
 
 @pytest.mark.asyncio

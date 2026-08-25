@@ -194,7 +194,7 @@ npm audit --audit-level=high
 npm run build
 ```
 
-The current implementation passes 302 backend tests and 98 frontend Vitest tests, plus backend
+The current implementation passes 447 backend tests and 135 frontend Vitest tests, plus backend
 format/lint/strict-type gates. Live OpenRouter Vertex initial/step-result
 Perception, initial/mid-session Decision, and grounded final-answer contracts pass against
 `google/gemini-3.7-flash`; the final answer contained one host-validatable cited claim with no retry. The final

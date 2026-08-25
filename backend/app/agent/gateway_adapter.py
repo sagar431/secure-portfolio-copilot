@@ -137,6 +137,10 @@ class AgentGatewayAdapter:
                 *calculation_evidence,
             ),
             calculations=result.calculations,
+            memory_context=result.memories,
+            memory_notification=(
+                result.memory_proposal.notification if result.memory_proposal is not None else None
+            ),
             duration_ms=result.duration_ms,
             retryable=False,
             retry_count=result.retry_count,

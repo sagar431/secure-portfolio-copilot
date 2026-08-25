@@ -2,7 +2,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Literal, TypeVar
 from uuid import UUID, uuid4
 
 from app.agent.approval_security import canonical_action_hash, classify_tool_risk
@@ -18,6 +18,7 @@ from app.agent.models import (
     AgentLoopLimits,
     AgentRunOutcome,
     AgentSession,
+    GoalStatus,
     ObservationStatus,
     PerceptionSnapshot,
     RemainingBudgets,
@@ -32,9 +33,16 @@ from app.agent.models import (
 )
 from app.agent.plan_state import PlanContractError, PlanExhaustedError, PlanState
 from app.calculations.contracts import CalculationMetric, CalculationResult
-from app.chat.contracts import GroundedEvidence, GroundedGenerationRequest, LLMProviderError
+from app.chat.contracts import (
+    GroundedAgentContext,
+    GroundedEvidence,
+    GroundedGenerationRequest,
+    GroundedMemory,
+    GroundedWorkingMessage,
+    LLMProviderError,
+)
 from app.chat.service import GroundingValidationError, validate_grounded_answer
-from app.mcp_gateway.contracts import PermittedToolDescriptor
+from app.mcp_gateway.contracts import PermittedToolDescriptor, ProposeMemoryInput
 from app.models.agent_runs import AgentControlMode, ApprovalRiskClass
 from app.policies.models import AuthorizationContext
 from app.schemas.chat import (
@@ -56,6 +64,12 @@ _CALCULATOR_TOOLS = frozenset(
         "portfolio.calculate_ebitda_margin",
         "portfolio.calculate_revenue_growth",
         "portfolio.calculate_net_profit_margin",
+        "portfolio.query_financial_metrics",
+        "portfolio.calculate_debt_to_equity",
+        "portfolio.calculate_cash_runway",
+        "portfolio.calculate_cagr",
+        "portfolio.search_memory",
+        "portfolio.propose_memory",
     }
 )
 _TRACE_SAFE_TOOL_NAMES = frozenset({_SEARCH_TOOL, _EXCERPT_TOOL, *_CALCULATOR_TOOLS})
@@ -154,6 +168,9 @@ class AgentLoop:
         agent_control_mode: AgentControlMode = AgentControlMode.BALANCED,
         approved_action_hash: str | None = None,
         reconstructed_steps: tuple[ReconstructedStep, ...] = (),
+        memories: tuple[GroundedMemory, ...] = (),
+        recent_messages: tuple[GroundedWorkingMessage, ...] = (),
+        conversation_summary: str | None = None,
     ) -> AgentRunOutcome:
         started = self._clock()
         session = AgentSession(
@@ -175,6 +192,16 @@ class AgentLoop:
             self._gateway.set_evidence_sequence(
                 sum(len(item.observation.evidence) for item in reconstructed_steps)
             )
+
+        # Providers are request-scoped. Context is a bounded, non-authoritative projection;
+        # authorization itself remains exclusively in the host-owned scope and gateway.
+        prompt_context = GroundedAgentContext(
+            memories=memories,
+            recent_messages=recent_messages,
+            conversation_summary=conversation_summary,
+        )
+        for stage in (self._perception, self._decision):
+            stage.bind_request_context(prompt_context)
 
         try:
             perception = await self._within_budget(
@@ -624,6 +651,69 @@ class AgentLoop:
                     replan_count=replan_count,
                     retry_count=retry_count,
                 )
+            if action.action_name == "portfolio.search_memory":
+                if observation.memory_context:
+                    summaries = " ".join(
+                        f"{index}. {item.summary}"
+                        for index, item in enumerate(observation.memory_context, start=1)
+                    )
+                    answer = (
+                        "From your authorized private memory/history: "
+                        f"{summaries} This is prior context, not current financial evidence."
+                    )
+                else:
+                    answer = "I don’t have matching authorized private memory for that request."
+                trace.append(
+                    self._event(
+                        TraceEventType.FINALIZATION,
+                        TraceStatus.COMPLETED,
+                        "AUTHORIZED_MEMORY_SUMMARIZED",
+                    )
+                )
+                return self._terminal(
+                    session,
+                    TerminalStatus.COMPLETED,
+                    StoppingReason.COMPLETED,
+                    trace,
+                    step_count,
+                    replan_count,
+                    retry_count,
+                    answer=answer,
+                )
+            if action.action_name == "portfolio.propose_memory":
+                proposal = (
+                    action.arguments if isinstance(action.arguments, ProposeMemoryInput) else None
+                )
+                if proposal is None:
+                    return self._terminal(
+                        session,
+                        TerminalStatus.FAILED,
+                        StoppingReason.TOOL_ERROR,
+                        trace,
+                        step_count,
+                        replan_count,
+                        retry_count,
+                    )
+                trace.append(
+                    self._event(
+                        TraceEventType.FINALIZATION,
+                        TraceStatus.COMPLETED,
+                        "MEMORY_PROPOSAL_SENT_TO_HOST_POLICY",
+                    )
+                )
+                return self._terminal(
+                    session,
+                    TerminalStatus.COMPLETED,
+                    StoppingReason.COMPLETED,
+                    trace,
+                    step_count,
+                    replan_count,
+                    retry_count,
+                    answer=(
+                        observation.memory_notification or "Memory proposal sent to host policy."
+                    ),
+                    memory_proposal=proposal,
+                )
             remaining_budgets = RemainingBudgets(
                 tool_steps=max(0, self._limits.max_steps - step_count),
                 retrieval_rewrites=max(
@@ -779,13 +869,22 @@ class AgentLoop:
             for item in evidence
         )
         metric_label = {
+            CalculationMetric.FINANCIAL_METRIC: calculation.trusted_inputs[0].name,
             CalculationMetric.EBITDA_MARGIN: "EBITDA margin",
             CalculationMetric.REVENUE_GROWTH: "Revenue growth",
             CalculationMetric.NET_PROFIT_MARGIN: "Net profit margin",
+            CalculationMetric.DEBT_TO_EQUITY: "Debt-to-equity",
+            CalculationMetric.CASH_RUNWAY: "Stress-case cash runway",
+            CalculationMetric.CAGR: "Revenue CAGR",
         }[calculation.metric]
+        rendered_value = (
+            f"{calculation.result:.2f}%"
+            if calculation.unit == "percent"
+            else f"{calculation.result:.2f} {calculation.unit}"
+        )
         claim_text = (
             f"{metric_label} for {calculation.company_slug} in {calculation.period} "
-            f"is {calculation.result:.2f}%."
+            f"is {rendered_value}."
         )
         calculation_data = CalculationData(
             calculation_id=calculation.calculation_id,
@@ -943,6 +1042,7 @@ class AgentLoop:
         citations: tuple[GroundedCitationData, ...] = (),
         limitations: tuple[str, ...] = (),
         calculations: tuple[CalculationData, ...] = (),
+        memory_proposal: ProposeMemoryInput | None = None,
         input_tokens: int | None = None,
         output_tokens: int | None = None,
     ) -> AgentRunOutcome:
@@ -964,6 +1064,16 @@ class AgentLoop:
                 "trace": tuple(trace),
             }
         )
+        policy_decision: Literal["NOT_EVALUATED", "ALLOWED", "DENIED"] = "NOT_EVALUATED"
+        if any(item.policy_decision == "DENIED" for item in session.safe_steps):
+            policy_decision = "DENIED"
+        elif any(item.policy_decision == "ALLOWED" for item in session.safe_steps):
+            policy_decision = "ALLOWED"
+        evidence_advanced_goal = any(
+            item.local_goal_status in {GoalStatus.ADVANCED, GoalStatus.SATISFIED}
+            or item.global_goal_status in {GoalStatus.ADVANCED, GoalStatus.SATISFIED}
+            for item in session.perceptions[1:]
+        )
         return AgentRunOutcome(
             agent_session_id=session.session_id,
             terminal_status=status,
@@ -973,10 +1083,16 @@ class AgentLoop:
             citations=citations,
             limitations=limitations,
             calculations=calculations,
+            memory_proposal=memory_proposal,
             step_count=step_count,
             replan_count=replan_count,
             retry_count=retry_count,
             trace=tuple(trace),
+            selected_intent=(session.perceptions[0].intent if session.perceptions else None),
+            policy_decision=policy_decision,
+            tool_shortlist=tuple(item.name for item in session.permitted_tool_catalog),
+            plan_version=(session.plans[-1].version if session.plans else None),
+            evidence_advanced_goal=evidence_advanced_goal,
             plan_versions=session.plans,
             safe_steps=session.safe_steps,
             safe_observations=session.safe_observations,

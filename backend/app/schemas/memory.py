@@ -5,6 +5,9 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 MemoryScopeValue = Literal["PRIVATE_USER", "FINANCE", "LEGAL", "SHARED"]
+MemoryTypeValue = Literal["SEMANTIC", "EPISODIC", "CONVERSATION_SUMMARY"]
+MemoryOriginValue = Literal["EXPLICIT_USER", "AUTOMATIC_EXTRACTOR", "SYSTEM_SUMMARY"]
+MemoryStatusValue = Literal["PENDING_CONFIRMATION", "ACTIVE", "SUPERSEDED", "EXPIRED", "DELETED"]
 UUIDInput = Annotated[UUID, Field(strict=False)]
 
 
@@ -52,20 +55,33 @@ class MemorySourceData(BaseModel):
     chunk_id: UUID
     document_id: UUID
     document_version_id: UUID
+    document_name: str
 
 
 class MemoryData(BaseModel):
     id: UUID
     company_id: UUID
     scope: MemoryScopeValue
+    memory_type: MemoryTypeValue
+    origin: MemoryOriginValue
+    status: MemoryStatusValue
     owner_user_id: UUID | None
     department: Literal["finance", "legal", "shared"]
     visibility: Literal["DEPARTMENT_PRIVATE", "TENANT_SHARED"]
     classification: Literal["FINANCE_ONLY", "LEGAL_ONLY_CONFIDENTIAL", "TENANT_SHARED"]
     content: str
+    normalized_key: str | None
+    reason: str
+    confidence: float = Field(ge=0, le=1)
+    importance: float = Field(ge=0, le=1)
+    owner_display: str
+    tenant_display: str
+    company_display: str
+    source_conversation: str | None
     expires_at: datetime
     created_at: datetime
     can_delete: bool
+    can_confirm: bool
     sources: tuple[MemorySourceData, ...]
 
 
@@ -76,3 +92,7 @@ class MemoryListData(BaseModel):
 class DeletedMemoryData(BaseModel):
     memory_id: UUID
     deleted: Literal[True] = True
+
+
+class MemoryMutationData(BaseModel):
+    memory: MemoryData

@@ -12,7 +12,7 @@ const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const REASON = /^[A-Z][A-Z0-9_]{1,95}$/
 const TOOL =
-  /^portfolio\.(search_authorized_documents|get_document_excerpt|calculate_(ebitda_margin|revenue_growth|net_profit_margin))$/
+  /^portfolio\.(search_authorized_documents|get_document_excerpt|query_financial_metrics|search_memory|propose_memory|calculate_(ebitda_margin|revenue_growth|net_profit_margin|debt_to_equity|cash_runway|cagr))$/
 const STATUSES = new Set([
   'CREATED',
   'RUNNING',

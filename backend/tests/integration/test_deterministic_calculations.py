@@ -4,8 +4,20 @@ import pytest
 from sqlalchemy import select
 
 from app.auth.repository import build_authorization_context, get_user_by_email
-from app.mcp_gateway.adapters import CalculateEbitdaMarginAdapter
-from app.mcp_gateway.contracts import CalculateFinancialMetricInput, CalculationPayload
+from app.mcp_gateway.adapters import (
+    CalculateCagrAdapter,
+    CalculateCashRunwayAdapter,
+    CalculateDebtToEquityAdapter,
+    CalculateEbitdaMarginAdapter,
+    QueryFinancialMetricsAdapter,
+)
+from app.mcp_gateway.contracts import (
+    CalculateCagrInput,
+    CalculateFinancialMetricInput,
+    CalculationPayload,
+    FinancialMetricName,
+    QueryFinancialMetricsInput,
+)
 from app.mcp_gateway.errors import ToolAuthorizationError
 from app.models.documents import ParsedCell, ParsedRow, ParsedSheet
 from tests.conftest import AuthHarness
@@ -122,6 +134,102 @@ async def test_calculator_resolves_unique_authorized_workspace_alias_to_canonica
     calculation = payload.calculations[0]
     assert calculation.company_slug == "orion-main"
     assert calculation.result == 10.0
+
+
+@pytest.mark.asyncio
+async def test_expanded_financial_tools_use_authorized_raw_rows(
+    auth_harness: AuthHarness,
+) -> None:
+    await _prepare_orion_workbook(auth_harness)
+    async with auth_harness.session_factory() as session:
+        alice = await get_user_by_email(session, "alice@example.com")
+        assert alice is not None
+        context = build_authorization_context(alice)
+        assert context is not None
+        common = CalculateFinancialMetricInput(company_slug="orion-main", reporting_period="FY2025")
+        debt = await CalculateDebtToEquityAdapter(session).invoke(
+            arguments=common, authorization_scope=context.scope, request_id="debt-equity"
+        )
+        runway = await CalculateCashRunwayAdapter(session).invoke(
+            arguments=common, authorization_scope=context.scope, request_id="cash-runway"
+        )
+        cagr = await CalculateCagrAdapter(session).invoke(
+            arguments=CalculateCagrInput(
+                company_slug="orion-main", start_period="FY2024", end_period="FY2025"
+            ),
+            authorization_scope=context.scope,
+            request_id="cagr",
+        )
+        revenue = await QueryFinancialMetricsAdapter(session).invoke(
+            arguments=QueryFinancialMetricsInput(
+                company_slug="orion-main",
+                reporting_period="FY2025",
+                metric=FinancialMetricName.REVENUE,
+            ),
+            authorization_scope=context.scope,
+            request_id="metric-query",
+        )
+        ebitda = await QueryFinancialMetricsAdapter(session).invoke(
+            arguments=QueryFinancialMetricsInput(
+                company_slug="orion-main",
+                reporting_period="FY2025",
+                metric=FinancialMetricName.EBITDA,
+            ),
+            authorization_scope=context.scope,
+            request_id="metric-ebitda",
+        )
+        net_profit = await QueryFinancialMetricsAdapter(session).invoke(
+            arguments=QueryFinancialMetricsInput(
+                company_slug="orion-main",
+                reporting_period="FY2025",
+                metric=FinancialMetricName.NET_PROFIT,
+            ),
+            authorization_scope=context.scope,
+            request_id="metric-net-profit",
+        )
+
+    assert isinstance(debt, CalculationPayload)
+    assert debt.calculations[0].result == 1.375
+    assert debt.calculations[0].unit == "x"
+    assert len(debt.calculations[0].trusted_inputs) == 7
+    assert isinstance(runway, CalculationPayload)
+    assert runway.calculations[0].result == 6.0
+    assert runway.calculations[0].unit == "months"
+    assert isinstance(cagr, CalculationPayload)
+    assert cagr.calculations[0].result == 25.0
+    assert isinstance(revenue, CalculationPayload)
+    assert revenue.calculations[0].result == 150.0
+    assert revenue.calculations[0].unit == "INR crore"
+    assert isinstance(ebitda, CalculationPayload)
+    assert ebitda.calculations[0].result == 15.0
+    assert len(ebitda.calculations[0].trusted_inputs) == 3
+    assert ebitda.calculations[0].warnings
+    assert isinstance(net_profit, CalculationPayload)
+    assert net_profit.calculations[0].result == 4.5
+    assert len(net_profit.calculations[0].trusted_inputs) == 6
+
+
+@pytest.mark.asyncio
+async def test_expanded_financial_tools_complete_through_the_bounded_agent_loop(
+    auth_harness: AuthHarness,
+) -> None:
+    await _prepare_orion_workbook(auth_harness)
+    alice = await _login(auth_harness.client, "alice@example.com")
+    conversation = await _create_conversation(auth_harness, alice, "Expanded agent tools")
+    cases = (
+        ("What was Orion revenue for FY2025?", "financial_metric", 150.0),
+        ("Calculate Orion debt-to-equity for FY2025", "debt_to_equity", 1.375),
+        ("Calculate Orion cash runway for FY2025", "cash_runway", 6.0),
+        ("Calculate Orion CAGR from FY2024 to FY2025", "cagr", 25.0),
+    )
+    for question, metric, expected in cases:
+        response = await _run(auth_harness, alice, str(conversation["id"]), question)
+        assert response.status_code == 200, response.text
+        payload = response.json()["data"]
+        assert payload["terminal_status"] == "completed"
+        assert payload["calculations"][0]["metric"] == metric
+        assert payload["calculations"][0]["result"] == expected
+        assert payload["citations"]
 
 
 @pytest.mark.asyncio

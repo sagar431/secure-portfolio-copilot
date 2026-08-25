@@ -55,6 +55,8 @@ def build_in_process_mcp_server(
         ApprovedToolName.CALCULATE_EBITDA_MARGIN,
         ApprovedToolName.CALCULATE_REVENUE_GROWTH,
         ApprovedToolName.CALCULATE_NET_PROFIT_MARGIN,
+        ApprovedToolName.CALCULATE_DEBT_TO_EQUITY,
+        ApprovedToolName.CALCULATE_CASH_RUNWAY,
     )
 
     def register_calculator(calculator_name: ApprovedToolName) -> None:
@@ -78,5 +80,73 @@ def build_in_process_mcp_server(
     for calculator_name in calculator_tools:
         if calculator_name in catalog:
             register_calculator(calculator_name)
+
+    if ApprovedToolName.QUERY_FINANCIAL_METRICS in catalog:
+
+        @server.tool(name="portfolio.query_financial_metrics", structured_output=True)
+        async def query_financial_metrics(
+            company_slug: str, reporting_period: str, metric: str
+        ) -> StructuredToolObservation:
+            return await gateway.execute(
+                tool_name="portfolio.query_financial_metrics",
+                arguments={
+                    "company_slug": company_slug,
+                    "reporting_period": reporting_period,
+                    "metric": metric,
+                },
+                authorization_scope=authorization_scope,
+                permitted_tools=permitted_tools,
+                request_id=request_id,
+            )
+
+    if ApprovedToolName.CALCULATE_CAGR in catalog:
+
+        @server.tool(name="portfolio.calculate_cagr", structured_output=True)
+        async def calculate_cagr(
+            company_slug: str, start_period: str, end_period: str, metric: str = "revenue"
+        ) -> StructuredToolObservation:
+            return await gateway.execute(
+                tool_name="portfolio.calculate_cagr",
+                arguments={
+                    "company_slug": company_slug,
+                    "start_period": start_period,
+                    "end_period": end_period,
+                    "metric": metric,
+                },
+                authorization_scope=authorization_scope,
+                permitted_tools=permitted_tools,
+                request_id=request_id,
+            )
+
+    if ApprovedToolName.SEARCH_MEMORY in catalog:
+
+        @server.tool(name="portfolio.search_memory", structured_output=True)
+        async def search_memory(query: str, mode: str, top_k: int = 3) -> StructuredToolObservation:
+            return await gateway.execute(
+                tool_name="portfolio.search_memory",
+                arguments={"query": query, "mode": mode, "top_k": top_k},
+                authorization_scope=authorization_scope,
+                permitted_tools=permitted_tools,
+                request_id=request_id,
+            )
+
+    if ApprovedToolName.PROPOSE_MEMORY in catalog:
+
+        @server.tool(name="portfolio.propose_memory", structured_output=True)
+        async def propose_memory(
+            content: str, normalized_key: str, memory_type: str, explicit: bool
+        ) -> StructuredToolObservation:
+            return await gateway.execute(
+                tool_name="portfolio.propose_memory",
+                arguments={
+                    "content": content,
+                    "normalized_key": normalized_key,
+                    "memory_type": memory_type,
+                    "explicit": explicit,
+                },
+                authorization_scope=authorization_scope,
+                permitted_tools=permitted_tools,
+                request_id=request_id,
+            )
 
     return server

@@ -33,12 +33,21 @@ from app.agent.models import (
     StructuredObservation,
     TerminalStatus,
 )
-from app.chat.contracts import GroundedAnswerDraft, GroundedClaimDraft, GroundedEvidence
+from app.chat.contracts import (
+    GroundedAnswerDraft,
+    GroundedClaimDraft,
+    GroundedEvidence,
+    GroundedMemory,
+    GroundedWorkingMessage,
+)
 from app.chat.fake import DeterministicFakeLLMProvider
 from app.mcp_gateway.contracts import (
     APPROVED_TOOL_NAMES,
     GetDocumentExcerptInput,
+    MemoryToolItem,
+    ProposeMemoryInput,
     SearchAuthorizedDocumentsInput,
+    SearchMemoryInput,
 )
 from app.mcp_gateway.gateway import ApprovedToolGateway
 from app.models.agent_runs import AgentControlMode
@@ -515,3 +524,110 @@ async def test_model_duration_and_citation_failures_terminate_safely() -> None:
 
 def test_loop_exposes_no_unrestricted_execution_methods() -> None:
     assert set(AgentLoop.__dict__).isdisjoint({"run_user_code", "execute_python", "execute_sql"})
+
+
+@pytest.mark.asyncio
+async def test_loop_binds_bounded_working_semantic_and_summary_context_before_perception() -> None:
+    clarify = _terminal_action(ActionType.CLARIFY)
+    loop, perception, _ = _loop(
+        (_perception(PerceptionMode.USER_QUERY),),
+        (_decision((clarify,), 0),),
+    )
+    memory = GroundedMemory(
+        memory_id=uuid4(),
+        scope="PRIVATE_USER",
+        memory_type="SEMANTIC",
+        content="Prefer INR crores.",
+    )
+    recent = (GroundedWorkingMessage(role="user", content="Earlier margin question"),)
+    context = _context()
+
+    await loop.run(
+        query="Continue that work.",
+        authorization_context=context,
+        permitted_tool_catalog=_catalog(context),
+        request_id="request-working-context-test",
+        memories=(memory,),
+        recent_messages=recent,
+        conversation_summary="Investigating operating margin.",
+    )
+
+    assert perception.request_context.memories == (memory,)
+    assert perception.request_context.recent_messages == recent
+    assert perception.request_context.conversation_summary == "Investigating operating margin."
+
+
+@pytest.mark.asyncio
+async def test_memory_search_finalizes_as_prior_context_without_document_citations() -> None:
+    action = Action(
+        type=ActionType.TOOL_CALL,
+        action_name="portfolio.search_memory",
+        arguments=SearchMemoryInput(query="last investigation", mode="latest_episode", top_k=1),
+        reason_code="SEARCH_AUTHORIZED_MEMORY",
+    )
+    observation = StructuredObservation(
+        tool_name="portfolio.search_memory",
+        status=ObservationStatus.SUCCESS,
+        memory_context=(
+            MemoryToolItem(
+                memory_id=uuid4(),
+                memory_type="EPISODIC",
+                scope="PRIVATE_USER",
+                summary="Investigated Orion operating margin.",
+                source_count=1,
+            ),
+        ),
+        duration_ms=1,
+        reason_code="TOOL_COMPLETED",
+    )
+    loop, perception, _ = _loop(
+        (_perception(PerceptionMode.USER_QUERY),),
+        (_decision((action,), 0),),
+        (observation,),
+    )
+    result = await _run(loop)
+
+    assert result.terminal_status == TerminalStatus.COMPLETED
+    assert "private memory/history" in result.answer
+    assert "not current financial evidence" in result.answer
+    assert result.citations == ()
+    assert perception.step_result_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_memory_proposal_returns_to_host_policy_without_direct_loop_write() -> None:
+    proposal = ProposeMemoryInput(
+        content="Present financial values in INR crores.",
+        normalized_key="financial_value_format",
+        explicit=True,
+    )
+    action = Action(
+        type=ActionType.TOOL_CALL,
+        action_name="portfolio.propose_memory",
+        arguments=proposal,
+        reason_code="PROPOSE_MEMORY_TO_HOST_POLICY",
+    )
+    observation = StructuredObservation(
+        tool_name="portfolio.propose_memory",
+        status=ObservationStatus.SUCCESS,
+        memory_notification="Memory proposal sent to host policy",
+        duration_ms=1,
+        reason_code="TOOL_COMPLETED",
+    )
+    loop, perception, _ = _loop(
+        (_perception(PerceptionMode.USER_QUERY),),
+        (_decision((action,), 0),),
+        (observation,),
+    )
+    context = _context()
+    result = await loop.run(
+        query="Remember my preference.",
+        authorization_context=context,
+        permitted_tool_catalog=_catalog(context),
+        request_id="memory-proposal-test",
+        approved_action_hash=canonical_action_hash(action),
+    )
+
+    assert result.terminal_status == TerminalStatus.COMPLETED
+    assert result.memory_proposal == proposal
+    assert perception.step_result_calls == 0

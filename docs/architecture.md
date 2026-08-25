@@ -1,4 +1,55 @@
-# Agent Approval Controls Architecture
+# Secure Portfolio Copilot Architecture
+
+## Current memory-aware request path
+
+Every chat request begins with a typed intent decision; retrieval is not the default entry point.
+The router has no authorization power. The host reloads the actor's database grants, then selects
+one of eight bounded workflows:
+
+```text
+authenticated request
+  -> database-derived AuthorizationScope
+  -> CASUAL | DOCUMENT_QUESTION | CONVERSATION_FOLLOW_UP | MEMORY_RECALL
+     | MEMORY_WRITE | CALCULATION | CLARIFICATION | REFUSE
+  -> authorize-first conversation/memory projection where relevant
+  -> authorized repository or request-scoped approved MCP tool
+  -> host citation/numeric/schema/terminal validation
+  -> atomic message, trace, episode, and replay persistence
+  -> strict validated NDJSON events
+```
+
+The direct grounded-chat path and the bounded agent path share the same repositories and trust
+rules. Perception observes a bounded projection; Decision selects one typed action from a
+host-shortlisted catalog; only the host executes it. Completed steps are immutable and the loop has
+hard step, rewrite, replan, retry, tool-timeout, and total-duration bounds.
+
+Working memory is a persisted owner/conversation message window plus rolling summary. Semantic and
+episodic memory is first filtered by tenant, company, department, private owner, lifecycle, expiry,
+and current source grants; only then is it ranked. These projections are quoted as untrusted
+non-evidentiary context. They cannot expand scope, select tools, or satisfy citations.
+
+Known safe explicit preference phrases use a deterministic-first extractor; only genuinely fuzzy
+memory candidates depend on the constrained provider. Successful episodes copy provenance from the
+answer's cited chunks rather than every retrieved candidate, so unrelated cross-department
+distractors cannot suppress a valid episode. A later continuation recovers only the prior goal and
+re-runs it against current authorized evidence; the stored historical outcome is never promoted to
+current evidence.
+
+The request-scoped MCP registry is static: `search_authorized_documents`, `get_document_excerpt`,
+`query_financial_metrics`, `calculate_ebitda_margin`, `calculate_revenue_growth`,
+`calculate_net_profit_margin`, `calculate_debt_to_equity`, `calculate_cash_runway`,
+`calculate_cagr`, `search_memory`, and `propose_memory`. All use the `portfolio.` namespace.
+The first ten are bounded reads/calculations; `propose_memory` only returns a typed candidate for
+host policy. Remote MCP and dynamic discovery are deliberately deferred until deployment and
+security ownership require a transport boundary.
+
+Streaming is authenticated POST plus fetch-readable NDJSON. Safe progress events may be sent as
+work happens, but model drafts are buffered. Only after response, citation, number, and authorization
+validation does the server emit `answer.delta`, then citations and `message.completed`. The browser
+strictly rejects unknown fields/event types. `client_message_id` is unique per actor/conversation,
+so a retry replays the validated stored response rather than creating duplicate messages. The
+browser performs at most one transport reconnect with the same ID; a replay `message.started`
+resets prior-attempt answer/citation/notification rendering before validated delivery resumes.
 
 ## Scope
 
@@ -548,6 +599,55 @@ most `EMBEDDING_MAX_CHUNKS` `PENDING`/`FAILED` rows that are active, current, ap
 inside an admin `MANAGE_UPLOADS` workspace/company grant, and equal to authoritative ACL/lifecycle
 rows. `FOR UPDATE SKIP LOCKED` prevents concurrent workers from claiming the same rows. A successful
 call writes `READY` vectors and a count-only audit; provider failure rolls back and returns a generic 503. Operators repeat the call until `processed_chunk_count` is zero.
+
+## Automatic user-isolated memory
+
+The memory subsystem extends the existing PostgreSQL `memories`, `memory_sources`, conversations,
+messages, agent runs, and document chunks. It does not use filesystem session logs or a shared
+global index.
+
+```text
+short JWT
+  -> reload active user, memberships and grants from PostgreSQL
+  -> load bounded owner + tenant + conversation working memory
+  -> materialize authorized active memory candidates in SQL
+       -> exclude deleted / expired / pending / superseded
+       -> reauthorize every copied document/version/chunk source
+  -> rank only that candidate set (FTS + type + recency + importance + preference boost)
+  -> apply per-type and total context budgets
+  -> retrieve current authorized document evidence
+  -> clearly delimited prompt context -> grounded answer + current document citations
+```
+
+This ordering implements **authorize first, rank second**. Private ownership, tenant, company,
+department, classification, capabilities, and source access are database-derived. The memory API,
+extractor output, browser, and model cannot set them.
+
+Before generation, the prompt separates recent conversation, rolling summary, semantic
+preferences, prior episodes, current authorized evidence, and the current question. All memory and
+document text is quoted untrusted data. Memory may guide presentation or navigation but can never
+act as a system instruction, support a factual claim, or become a citation.
+
+After a successful response, the provider may return strict memory-candidate JSON. Deterministic
+host policy accepts only bounded low-risk private semantic preferences. Explicit preferences become
+active for 90 days; identical reconfirmation refreshes expiry; a changed normalized preference
+supersedes the old row atomically; inferred preferences remain pending; sensitive, temporary, and
+document-derived facts are rejected. Optional extraction failure is contained in a savepoint and
+cannot remove the answer.
+
+Useful grounded runs create private 30-day episodic summaries containing a short goal/outcome and
+copied source identifiers, never raw tool payloads, prompts, secrets, or hidden reasoning. On reuse,
+the source-aware authorization CTE must still match every current chunk and copied ACL field. The
+new answer is re-grounded from current document chunks and cites those documents, not the episode.
+
+Working memory uses at most eight persisted messages (each bounded for prompt use). Once that
+window fills, the service stores one bounded rolling `CONVERSATION_SUMMARY` scoped to the same
+authenticated tenant, owner, and conversation. PostgreSQL persistence makes all three memory types
+survive application restart.
+
+Current limitation: user-memory vector embeddings are not generated. Retrieval uses real
+PostgreSQL FTS and deterministic ranking through a clean repository abstraction; no fake vector
+search is presented. Document RAG continues to use its independent versioned embedding pipeline.
 
 ## Trust boundaries
 

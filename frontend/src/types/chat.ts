@@ -16,6 +16,18 @@ export interface ConversationListData {
   conversations: ConversationData[]
 }
 
+export interface ConversationMessageData {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
+}
+
+export interface ConversationMessagesData {
+  messages: ConversationMessageData[]
+  has_more: boolean
+}
+
 export interface ConversationCreateData {
   conversation: ConversationData
 }
@@ -27,6 +39,7 @@ export interface CreateConversationRequest {
 export interface SendConversationMessageRequest {
   content: string
   response_mode: ResponseMode
+  client_message_id?: string
 }
 
 export type AgentControlMode = 'guided' | 'balanced' | 'autonomous'
@@ -35,7 +48,23 @@ export interface RunAgentRequest extends SendConversationMessageRequest {
   agent_control_mode: AgentControlMode
 }
 
-export type GroundedAnswerStatus = 'grounded' | 'insufficient_evidence'
+export type GroundedAnswerStatus =
+  | 'grounded'
+  | 'insufficient_evidence'
+  | 'casual'
+  | 'memory_recall'
+  | 'memory_write'
+  | 'clarification'
+  | 'refused'
+export type RequestIntent =
+  | 'CASUAL'
+  | 'DOCUMENT_QUESTION'
+  | 'CONVERSATION_FOLLOW_UP'
+  | 'MEMORY_RECALL'
+  | 'MEMORY_WRITE'
+  | 'CALCULATION'
+  | 'CLARIFICATION'
+  | 'REFUSE'
 export type SafeModelName = 'Gemini 3.1 Flash Lite' | 'Gemini 3.7 Flash'
 export type ResponseMode = 'fast' | 'auto' | 'deep'
 
@@ -65,6 +94,7 @@ export interface GroundedAnswerData {
   user_message_id: string
   assistant_message_id: string
   status: GroundedAnswerStatus
+  intent_route: RequestIntent
   answer: string
   claims: GroundedClaimData[]
   citations: GroundedCitationData[]
@@ -79,6 +109,7 @@ export interface GroundedAnswerData {
   latency_ms: number | null
   estimated_model_cost_usd: string | null
   pricing_snapshot_date: string | null
+  memory_notifications: string[]
 }
 
 export type AgentTerminalStatus =
@@ -88,6 +119,17 @@ export type AgentTerminalStatus =
   | 'insufficient_evidence'
   | 'limit_reached'
   | 'failed'
+
+export type AgentPerceptionIntent =
+  | 'financial_lookup'
+  | 'legal_lookup'
+  | 'cross_domain_analysis'
+  | 'portfolio_comparison'
+  | 'calculation_required'
+  | 'memory_recall'
+  | 'memory_write'
+  | 'clarification'
+  | 'unsupported'
 
 export type AgentTraceEventType =
   | 'perception'
@@ -113,13 +155,19 @@ export interface AgentTraceEventData {
 }
 
 export type CalculationMetric =
-  'ebitda_margin' | 'revenue_growth' | 'net_profit_margin'
+  | 'financial_metric'
+  | 'ebitda_margin'
+  | 'revenue_growth'
+  | 'net_profit_margin'
+  | 'debt_to_equity'
+  | 'cash_runway'
+  | 'cagr'
 
 export interface CalculationInputData {
   name: string
   period: string
   value: number
-  unit: 'INR crore'
+  unit: 'INR crore' | 'INR crore/month'
   citation_id: string
 }
 
@@ -131,7 +179,7 @@ export interface CalculationData {
   formula: string
   trusted_inputs: CalculationInputData[]
   result: number
-  unit: 'percent'
+  unit: 'percent' | 'x' | 'months' | 'INR crore'
   citation_ids: string[]
 }
 
@@ -150,6 +198,11 @@ export interface AgentRunData {
   step_count: number
   replan_count: number
   retry_count: number
+  selected_intent: AgentPerceptionIntent | null
+  policy_decision: 'NOT_EVALUATED' | 'ALLOWED' | 'DENIED'
+  tool_shortlist: string[]
+  plan_version: number | null
+  evidence_advanced_goal: boolean
   trace: AgentTraceEventData[]
   model_name: SafeModelName | null
   route_reason: string | null
@@ -180,7 +233,10 @@ export interface AgentApprovalState {
     | 'STATE_CHANGING'
     | 'BUDGET_EXPANDING'
     | 'ALWAYS_REQUIRE_APPROVAL'
-  resource_type: 'authorized portfolio documents' | 'authorized financial data'
+  resource_type:
+    | 'authorized portfolio documents'
+    | 'authorized financial data'
+    | 'authorized private memory'
   estimated_cost_class: 'low' | 'standard'
   safe_scope_summary: string
   remaining_budget: { steps: number; tools: number }
@@ -221,3 +277,13 @@ export interface AgentChatTurn {
 }
 
 export type ChatTurn = GroundedChatTurn | AgentChatTurn
+
+export type ChatStreamProgress =
+  | { type: 'message.started' }
+  | { type: 'route.selected'; intent: RequestIntent }
+  | { type: 'retrieval.started' }
+  | { type: 'retrieval.completed'; citation_count: number }
+  | { type: 'memory.loaded'; memory_count: number }
+  | { type: 'answer.delta'; delta: string }
+  | { type: 'citation'; citation: GroundedCitationData }
+  | { type: 'memory.notification'; message: string }

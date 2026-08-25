@@ -7,7 +7,7 @@ from app.models.agent_runs import (
     AgentRun,
     AgentStep,
 )
-from app.models.chat import ChatRequestTrace, Conversation, Message
+from app.models.chat import ChatMessageRequest, ChatRequestTrace, Conversation, Message
 from app.models.documents import (
     Document,
     DocumentAuditEvent,
@@ -31,7 +31,7 @@ from app.models.identity import (
     User,
     WorkspaceGrant,
 )
-from app.models.memory import Memory, MemorySource
+from app.models.memory import Memory, MemoryAuditEvent, MemorySource
 
 __all__ = [
     "AgentObservationRecord",
@@ -42,6 +42,7 @@ __all__ = [
     "Company",
     "CompanyGrant",
     "ChatRequestTrace",
+    "ChatMessageRequest",
     "Conversation",
     "Department",
     "DepartmentGrant",
@@ -55,6 +56,7 @@ __all__ = [
     "Membership",
     "Message",
     "Memory",
+    "MemoryAuditEvent",
     "MemorySource",
     "ParsedCell",
     "ParsedPage",

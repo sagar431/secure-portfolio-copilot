@@ -9,10 +9,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.calculations.contracts import CalculationResult
 from app.chat.contracts import GroundedEvidence
 from app.mcp_gateway.contracts import (
+    CalculateCagrInput,
     CalculateFinancialMetricInput,
     GetDocumentExcerptInput,
+    MemoryToolItem,
     PermittedToolDescriptor,
+    ProposeMemoryInput,
+    QueryFinancialMetricsInput,
     SearchAuthorizedDocumentsInput,
+    SearchMemoryInput,
 )
 from app.policies.models import AuthorizationContext
 from app.schemas.chat import CalculationData, GroundedCitationData, GroundedClaimData
@@ -105,6 +110,8 @@ class PerceptionIntent(StrEnum):
     CROSS_DOMAIN_ANALYSIS = "cross_domain_analysis"
     PORTFOLIO_COMPARISON = "portfolio_comparison"
     CALCULATION_REQUIRED = "calculation_required"
+    MEMORY_RECALL = "memory_recall"
+    MEMORY_WRITE = "memory_write"
     CLARIFICATION = "clarification"
     UNSUPPORTED = "unsupported"
 
@@ -122,6 +129,7 @@ class RequiredEvidence(StrEnum):
     SHARED_DOCUMENT = "shared_document"
     COMPARISON_DOCUMENTS = "comparison_documents"
     CALCULATION_INPUTS = "calculation_inputs"
+    MEMORY_CONTEXT = "memory_context"
 
 
 class PerceptionRiskFlag(StrEnum):
@@ -200,6 +208,10 @@ ActionArguments = (
     SearchAuthorizedDocumentsInput
     | GetDocumentExcerptInput
     | CalculateFinancialMetricInput
+    | QueryFinancialMetricsInput
+    | CalculateCagrInput
+    | SearchMemoryInput
+    | ProposeMemoryInput
     | NoActionArguments
 )
 
@@ -227,8 +239,26 @@ class Action(StrictModel):
                 "portfolio.calculate_ebitda_margin",
                 "portfolio.calculate_revenue_growth",
                 "portfolio.calculate_net_profit_margin",
+                "portfolio.calculate_debt_to_equity",
+                "portfolio.calculate_cash_runway",
             } and not isinstance(self.arguments, CalculateFinancialMetricInput):
                 raise ValueError("Calculation actions require the exact calculation input schema")
+            if self.action_name == "portfolio.query_financial_metrics" and not isinstance(
+                self.arguments, QueryFinancialMetricsInput
+            ):
+                raise ValueError("Metric queries require the exact metric input schema")
+            if self.action_name == "portfolio.calculate_cagr" and not isinstance(
+                self.arguments, CalculateCagrInput
+            ):
+                raise ValueError("CAGR actions require the exact CAGR input schema")
+            if self.action_name == "portfolio.search_memory" and not isinstance(
+                self.arguments, SearchMemoryInput
+            ):
+                raise ValueError("Memory searches require the exact memory search schema")
+            if self.action_name == "portfolio.propose_memory" and not isinstance(
+                self.arguments, ProposeMemoryInput
+            ):
+                raise ValueError("Memory proposals require the exact proposal schema")
         elif self.action_name is not None or not isinstance(self.arguments, NoActionArguments):
             raise ValueError("Non-tool actions cannot carry a tool name or arguments")
         return self
@@ -297,6 +327,8 @@ class StructuredObservation(StrictModel):
     status: ObservationStatus
     evidence: tuple[GroundedEvidence, ...] = ()
     calculations: tuple[CalculationResult, ...] = Field(default=(), exclude=True)
+    memory_context: tuple[MemoryToolItem, ...] = ()
+    memory_notification: str | None = Field(default=None, max_length=120)
     duration_ms: int = Field(ge=0)
     retryable: bool = False
     retry_count: int = Field(default=0, ge=0, le=1)
@@ -304,7 +336,9 @@ class StructuredObservation(StrictModel):
 
     @model_validator(mode="after")
     def enforce_failure_shape(self) -> StructuredObservation:
-        if self.status != ObservationStatus.SUCCESS and (self.evidence or self.calculations):
+        if self.status != ObservationStatus.SUCCESS and (
+            self.evidence or self.calculations or self.memory_context or self.memory_notification
+        ):
             raise ValueError("Failed observations cannot expose evidence or calculations")
         if self.status == ObservationStatus.DENIED and self.retryable:
             raise ValueError("Authorization denials cannot be retried")
@@ -379,10 +413,18 @@ class AgentRunOutcome(StrictModel):
     citations: tuple[GroundedCitationData, ...] = ()
     limitations: tuple[str, ...] = ()
     calculations: tuple[CalculationData, ...] = ()
+    memory_proposal: ProposeMemoryInput | None = Field(default=None, exclude=True)
     step_count: int = Field(ge=0)
     replan_count: int = Field(ge=0)
     retry_count: int = Field(ge=0)
     trace: tuple[TraceEvent, ...]
+    selected_intent: PerceptionIntent | None = Field(default=None, exclude=True)
+    policy_decision: Literal["NOT_EVALUATED", "ALLOWED", "DENIED"] = Field(
+        default="NOT_EVALUATED", exclude=True
+    )
+    tool_shortlist: tuple[str, ...] = Field(default=(), max_length=11, exclude=True)
+    plan_version: int | None = Field(default=None, ge=1, le=2, exclude=True)
+    evidence_advanced_goal: bool = Field(default=False, exclude=True)
     plan_versions: tuple[Plan, ...] = Field(default=(), exclude=True)
     safe_steps: tuple[SafeStepSnapshot, ...] = Field(default=(), exclude=True)
     safe_observations: tuple[SafeObservationSnapshot, ...] = Field(default=(), exclude=True)

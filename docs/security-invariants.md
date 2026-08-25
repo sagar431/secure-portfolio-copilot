@@ -193,9 +193,10 @@ These rules apply now and must remain true as later milestones are approved.
 66. **Strict inert frontend.** The chat client rejects extra response fields, malformed provenance,
     mismatched conversation IDs, and missing/unknown/duplicate/unreferenced citations. React renders
     questions, answers, claims, limitations, titles, and excerpts as text rather than HTML.
-67. **No partial UI answer.** Loading, cancellation, timeout, denial, and error paths do not render a
-    partial provider response or unvalidated citation. Browser cancellation is a UI guarantee, not a
-    claim that already-started upstream work was canceled.
+67. **No unvalidated UI answer.** Loading, cancellation, timeout, denial, and error paths never
+    render provider drafts or unvalidated citations. Browser abort closes the stream; generator
+    cleanup cancels the answer task and rolls back. Work already accepted by an upstream provider
+    cannot be retracted, but its result is neither persisted nor streamed.
 68. **Non-agentic regression preserved.** The direct Step 6 message route remains available and
     continues to retrieve, generate, validate, persist, and fail independently of MCP/AgentLoop.
 69. **One bounded agent owner.** One typed `AgentSession` owns the request goal, immutable trusted
@@ -210,9 +211,10 @@ These rules apply now and must remain true as later milestones are approved.
 72. **MCP reauthorization.** Tool hiding is defense in depth. Every call rechecks the exact static
     name, shortlist, capability, strict input schema, and adapter database authorization before
     content is returned. Missing and unauthorized excerpt IDs are indistinguishable.
-73. **Static owned tools.** Only two document tools and three named fixed calculator tools exist.
-    Application startup fails on duplicate/missing names, namespace, schema, or capability drift.
-    No unrestricted runtime tool installation/discovery is present.
+73. **Static owned tools.** Only the eleven namespaced tools in the checked-in portfolio manifest
+    exist: two document tools, one metric query, six fixed calculators, authorized memory search,
+    and proposal-only memory. Application startup fails on duplicate/missing names, namespace,
+    schema, or capability drift. No unrestricted runtime installation/discovery is present.
 74. **Strict protocol boundaries.** Raw action JSON is validated before MCP SDK conversion, and MCP
     structured output is validated again locally. Coercible strings, forged scope keys, malformed
     input/output, corrupt provenance, oversized excerpts/results, and unknown fields fail closed.
@@ -300,6 +302,40 @@ These rules apply now and must remain true as later milestones are approved.
     input evidence set.
 104. **Calculator failures are content-free.** Missing, invalid, unauthorized, and division-by-zero
     paths return allow-listed reason codes with no calculations, evidence, raw values, SQL, or errors.
+105. **Intent precedes retrieval.** Every message has one locally validated route before document
+    retrieval. Greetings, thanks, explicit memory commands, recognized calculations, and obvious
+    forbidden scopes use deterministic rules. A fuzzy model classification cannot grant scope.
+106. **Bounded working memory.** Recent turns and the rolling summary are selected by exact tenant,
+    owner, and conversation, then length-limited before prompt construction. History is never an
+    authorization source or a system instruction.
+107. **Host-owned memory writes.** Extractors and `portfolio.propose_memory` may only return typed
+    candidates. Host policy derives owner, tenant, company, visibility, ACL, lifecycle, and expiry
+    and alone chooses ADD, NOOP, SUPERSEDE, pending confirmation, or rejection.
+108. **Validated streaming boundary.** The public NDJSON event union is strict and contains only
+    safe progress metadata, validated answer text, reconstructed citations, bounded memory notices,
+    and a terminal result/error. Raw provider tokens/JSON, prompts, tool payloads, hidden reasoning,
+    and unauthorized excerpts never enter it.
+109. **Actor-scoped replay.** `client_message_id` is bound to actor, conversation, and a normalized
+    request fingerprint. A matching completed retry replays one validated response; conflicting,
+    failed, or in-flight reuse fails safely and cannot duplicate persisted user/assistant messages.
+    The browser attempts at most one transport reconnect with the same identifier and resets visible
+    replay state on the next `message.started`; explicit cancellation is never reconnected.
+110. **Owned transcript reads.** Conversation history first resolves the conversation through its
+    current owner and tenant, returns a bounded chronological DTO, and uses the same safe 404 for
+    absent and foreign IDs.
+111. **Bounded visible orchestration summary.** The collapsed normal-chat trace exposes only the
+    selected typed Perception intent, host policy decision, approved tool-name shortlist, plan
+    version, selected tool/status/reason code, evidence-advanced boolean, bounded counters, and
+    terminal reason. It contains no query, plan prose, argument, observation, authorization object,
+    evidence content, prompt, provider payload, exception, rationale, or chain-of-thought.
+112. **Deterministic explicit-memory boundary.** Known safe, low-sensitivity preference forms are
+    normalized before any semantic provider call. Sensitive or temporary forms fail closed; fuzzy
+    proposals remain provider-assisted and cannot bypass host ownership, ACL, lifecycle, or content
+    validation.
+113. **Cited-source episodes and current re-grounding.** A private episode copies provenance only
+    from chunks cited by the validated answer. Continuations recover the bounded prior goal but
+    exclude the historical outcome from the current factual request, then retrieve and cite current
+    authorized evidence again.
 
 Automated tests cover password/token primitives, exact seeded scopes, policy reason codes, generic
 login errors, forged fields, malformed/expired/wrong-issuer/wrong-audience/wrong-signature tokens,
@@ -316,8 +352,9 @@ provider no-tool/bound/retry behavior, fake-provider grounded answers, citation 
 sanitized trace/log behavior, and all chat UI states. Steps 7 and 8 add adversarial action/gateway/MCP,
 strict schema, startup catalog, timeout/retry/denial, loop-limit/replan/rewrite, prompt-injection,
 typed perception/catalog, plan-version/order/history/replay, trace-smuggling, evidence/citation,
-real excerpt, and agent UI tests. Final verification passes 302 backend and 98 frontend tests,
-migration `0008 -> 0006 -> 0008` reversibility/drift checks, local MCP smoke,
+real excerpt, and agent UI tests. Current verification passes 447 backend and 135 frontend tests;
+revisions `20260823_0012` through `20260823_0015` each pass downgrade/re-upgrade plus final schema
+drift checks, alongside the local MCP smoke,
 production/integrity gates, and the zero-vulnerability frontend audit. Live Gemini 3.1 Flash Lite/Gemini 3.7 Flash routing plus
 OpenRouter Vertex Perception, typed-catalog Decision, and grounded finalization pass.
 ## Evaluation invariants

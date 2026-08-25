@@ -13,14 +13,20 @@ from pydantic import BaseModel, ValidationError
 from app.mcp_gateway.contracts import (
     APPROVED_TOOL_NAMES,
     ApprovedToolName,
+    CalculateCagrInput,
     CalculateFinancialMetricInput,
     CalculationPayload,
     GatewayReasonCode,
     GetDocumentExcerptInput,
+    MemoryProposalPayload,
+    MemorySearchPayload,
     PermittedToolDescriptor,
     PermittedToolInputField,
     PermittedToolInputSchema,
+    ProposeMemoryInput,
+    QueryFinancialMetricsInput,
     SearchAuthorizedDocumentsInput,
+    SearchMemoryInput,
     StructuredToolObservation,
     ToolPayload,
 )
@@ -101,6 +107,48 @@ TOOL_MANIFEST: Mapping[ApprovedToolName, ToolManifestEntry] = {
         purpose="Calculate net profit margin from authorized structured financial inputs.",
         safe_result_description="Formula, trusted inputs, percent result, and source citations.",
     ),
+    ApprovedToolName.QUERY_FINANCIAL_METRICS: ToolManifestEntry(
+        input_model=QueryFinancialMetricsInput,
+        output_model=CalculationPayload,
+        required_capability=Capability.QUERY_DOCUMENTS,
+        purpose="Load one bounded authorized financial metric with source provenance.",
+        safe_result_description="Metric value, unit, period, and host-owned source citation.",
+    ),
+    ApprovedToolName.CALCULATE_DEBT_TO_EQUITY: ToolManifestEntry(
+        input_model=CalculateFinancialMetricInput,
+        output_model=CalculationPayload,
+        required_capability=Capability.QUERY_DOCUMENTS,
+        purpose="Calculate debt-to-equity from authorized raw balance-sheet inputs.",
+        safe_result_description="Formula, trusted inputs, ratio result, and source citations.",
+    ),
+    ApprovedToolName.CALCULATE_CASH_RUNWAY: ToolManifestEntry(
+        input_model=CalculateFinancialMetricInput,
+        output_model=CalculationPayload,
+        required_capability=Capability.QUERY_DOCUMENTS,
+        purpose="Calculate stress-case cash runway from authorized raw cash-flow inputs.",
+        safe_result_description="Formula, trusted inputs, month result, and source citations.",
+    ),
+    ApprovedToolName.CALCULATE_CAGR: ToolManifestEntry(
+        input_model=CalculateCagrInput,
+        output_model=CalculationPayload,
+        required_capability=Capability.QUERY_DOCUMENTS,
+        purpose="Calculate revenue CAGR between two bounded reporting periods.",
+        safe_result_description="Formula, trusted endpoint values, percent result, and citations.",
+    ),
+    ApprovedToolName.SEARCH_MEMORY: ToolManifestEntry(
+        input_model=SearchMemoryInput,
+        output_model=MemorySearchPayload,
+        required_capability=Capability.QUERY_DOCUMENTS,
+        purpose="Search reauthorized private memory or load the latest authorized episode.",
+        safe_result_description="Bounded untrusted memory summaries with safe provenance counts.",
+    ),
+    ApprovedToolName.PROPOSE_MEMORY: ToolManifestEntry(
+        input_model=ProposeMemoryInput,
+        output_model=MemoryProposalPayload,
+        required_capability=Capability.QUERY_DOCUMENTS,
+        purpose="Submit a typed private-memory candidate to host policy without writing it.",
+        safe_result_description="A host-policy review acknowledgement; no memory is persisted.",
+    ),
 }
 
 
@@ -135,8 +183,6 @@ class ApprovedToolGateway:
             if adapter.required_capability != expected.required_capability:
                 raise GatewayConfigurationError("CAPABILITY_MISMATCH")
             by_name[adapter.name] = adapter
-        if set(by_name) != set(TOOL_MANIFEST):
-            raise GatewayConfigurationError("TOOL_CATALOG_INCOMPLETE")
         self._adapters = by_name
         self._timeout_seconds = timeout_seconds
         self._max_transient_retries = max_transient_retries
@@ -175,7 +221,14 @@ class ApprovedToolGateway:
             for field_name, raw_field in properties.items():
                 if not isinstance(raw_field, dict):
                     raise GatewayConfigurationError("INPUT_SCHEMA_MISMATCH")
-                value_type = raw_field.get("type")
+                projected_field = raw_field
+                reference = raw_field.get("$ref")
+                if isinstance(reference, str) and reference.startswith("#/$defs/"):
+                    definition = schema.get("$defs", {}).get(reference.removeprefix("#/$defs/"))
+                    if not isinstance(definition, dict):
+                        raise GatewayConfigurationError("INPUT_SCHEMA_MISMATCH")
+                    projected_field = {**definition, **raw_field}
+                value_type = projected_field.get("type")
                 if field_name not in {
                     "query",
                     "top_k",
@@ -183,9 +236,18 @@ class ApprovedToolGateway:
                     "chunk_id",
                     "company_slug",
                     "reporting_period",
+                    "metric",
+                    "start_period",
+                    "end_period",
+                    "mode",
+                    "content",
+                    "normalized_key",
+                    "memory_type",
+                    "explicit",
                 } or value_type not in {
                     "string",
                     "integer",
+                    "boolean",
                 }:
                     raise GatewayConfigurationError("INPUT_SCHEMA_MISMATCH")
                 fields.append(
@@ -193,11 +255,11 @@ class ApprovedToolGateway:
                         name=field_name,
                         value_type=value_type,
                         required=field_name in required,
-                        minimum=raw_field.get("minimum"),
-                        maximum=raw_field.get("maximum"),
-                        min_length=raw_field.get("minLength"),
-                        max_length=raw_field.get("maxLength"),
-                        format=raw_field.get("format"),
+                        minimum=projected_field.get("minimum"),
+                        maximum=projected_field.get("maximum"),
+                        min_length=projected_field.get("minLength"),
+                        max_length=projected_field.get("maxLength"),
+                        format=projected_field.get("format"),
                     )
                 )
             descriptors.append(
@@ -218,7 +280,11 @@ class ApprovedToolGateway:
         status: Literal["completed", "denied", "failed"],
         reason_code: GatewayReasonCode,
         retry_count: int = 0,
-        payload: ToolPayload | CalculationPayload | None = None,
+        payload: ToolPayload
+        | CalculationPayload
+        | MemorySearchPayload
+        | MemoryProposalPayload
+        | None = None,
     ) -> StructuredToolObservation:
         duration_ms = max(0, int((time.perf_counter() - started_at) * 1000))
         return StructuredToolObservation(
@@ -230,6 +296,8 @@ class ApprovedToolGateway:
             duration_ms=duration_ms,
             evidence=payload.evidence if isinstance(payload, ToolPayload) else (),
             calculations=(payload.calculations if isinstance(payload, CalculationPayload) else ()),
+            memories=payload.memories if isinstance(payload, MemorySearchPayload) else (),
+            memory_proposal=payload if isinstance(payload, MemoryProposalPayload) else None,
         )
 
     async def execute(
@@ -259,7 +327,14 @@ class ApprovedToolGateway:
                 status="denied",
                 reason_code=GatewayReasonCode.TOOL_NOT_SHORTLISTED,
             )
-        adapter = self._adapters[approved_name]
+        adapter = self._adapters.get(approved_name)
+        if adapter is None:
+            return self._observation(
+                started_at=started_at,
+                tool_name=approved_name,
+                status="denied",
+                reason_code=GatewayReasonCode.UNKNOWN_TOOL,
+            )
         if not any(
             adapter.required_capability in grant.capabilities
             for grant in authorization_scope.grants
@@ -319,7 +394,10 @@ class ApprovedToolGateway:
                         reason_code=GatewayReasonCode.OUTPUT_SCHEMA_REJECTED,
                         retry_count=retry_count,
                     )
-                if not isinstance(payload, (ToolPayload, CalculationPayload)):
+                if not isinstance(
+                    payload,
+                    (ToolPayload, CalculationPayload, MemorySearchPayload, MemoryProposalPayload),
+                ):
                     return self._observation(
                         started_at=started_at,
                         tool_name=approved_name,

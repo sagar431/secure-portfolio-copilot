@@ -1,5 +1,90 @@
 # Implementation Status
 
+## Memory-aware bounded portfolio agent — current head (2026-08-23)
+
+The current head implements the complete request path requested for the memory-aware demo:
+
+`typed intent -> authorize-first memory/conversation context -> authorized retrieval or approved
+MCP tool -> deterministic validation -> persisted result -> validated NDJSON delivery`.
+
+- The host routes every request before retrieval as `CASUAL`, `DOCUMENT_QUESTION`,
+  `CONVERSATION_FOLLOW_UP`, `MEMORY_RECALL`, `MEMORY_WRITE`, `CALCULATION`, `CLARIFICATION`, or
+  `REFUSE`. Obvious greetings, memory commands, calculations, and recognizable forbidden scopes are
+  deterministic; only ambiguous classification may use the constrained provider.
+- Working memory is a bounded persisted message window plus an owner/conversation rolling summary.
+  Semantic preferences and episodic runs are private by default, lifecycle-managed, and selected
+  only after current SQL authorization and source revalidation. Memory is untrusted navigation
+  context, never financial evidence or an instruction.
+- Explicit low-sensitivity preference forms are resolved by a deterministic-first extractor before
+  the constrained semantic provider, so a safe `remember INR crores` request does not fail because
+  of transient model behavior. Fuzzy candidates still use the provider and every candidate still
+  passes the same host-owned policy boundary.
+- Episodes inherit only the reauthorized chunks cited by the accepted answer, never uncited
+  retrieval distractors. A continuation extracts only the prior goal, excludes the historical
+  outcome, and asks the finalizer to answer that goal from newly retrieved authorized evidence.
+- Perception and Decision receive bounded safe projections of recent conversation, summary,
+  semantic preferences, episodes, and the host-shortlisted tool catalog. The host owns scope,
+  approval, schemas, step/retry/time limits, arithmetic, citation validation, persistence, and the
+  explicit terminal state.
+- The request-scoped in-process MCP catalog contains eleven tools: authorized search/excerpt,
+  metric query, six fixed financial calculations, authorized memory search, and a proposal-only
+  memory tool. `propose_memory` cannot write directly; host policy derives owner, ACL, and expiry.
+- Authenticated POST streaming uses strict NDJSON events. Safe progress is immediate; provider
+  drafts remain server-side until validation, after which only validated answer deltas and
+  citations are emitted. Cancellation cancels the answer task and rolls back; an actor-scoped
+  `client_message_id` safely replays completed retries without duplicate messages. The client makes
+  at most one transport reconnect with that same ID and replaces prior-attempt rendering.
+- The chat UI now has independently scrolling conversation and transcript regions, persisted
+  history loading, deterministic first-message titles, a sticky bounded composer, validated
+  streaming with Stop, compact citations/memory notices, and collapsed details/sanitized trace.
+  The trace exposes only selected Perception intent, policy outcome, approved tool shortlist,
+  current plan version, selected tool/status/reason, evidence-advanced flag, bounded counters, and
+  terminal reason.
+- Legacy `Evaluation`/`New conversation` rows are preserved in PostgreSQL but displayed with a
+  bounded title derived from the first non-casual owned user message. This removes sidebar clutter
+  without deleting or rewriting existing conversations.
+- Alembic revisions `20260823_0012` through `20260823_0015` add automatic-memory lifecycle,
+  selected intent trace, actor-scoped stream replay, and the expanded approved tool constraint.
+- Current deterministic verification: 447 backend tests and 135 frontend tests pass; Ruff,
+  strict mypy, Prettier, ESLint, TypeScript, Vite production build, Alembic drift checks, and each
+  new revision's downgrade/re-upgrade cycle pass. The explicit opt-in live-model quality run passes
+  all ten semantic checks on the configured provider; it is supplementary, not deterministic
+  evidence.
+
+Older step-by-step checkpoints below are retained as historical implementation notes. Where their
+test counts, catalog size, migration head, or limitations differ, this current-head section and the
+current testing guide are authoritative.
+
+## Automatic user-isolated memory — implemented locally (2026-08-23)
+
+- Alembic `20260823_0012` extends the existing `memories`/`memory_sources` design with typed
+  `SEMANTIC`, `EPISODIC`, and `CONVERSATION_SUMMARY` records; explicit lifecycle states; origin,
+  normalized-key, confidence/importance, conversation/message/run provenance, supersession,
+  last-access, and a metadata-only durable audit table. PostgreSQL triggers reject cross-tenant
+  company, conversation, message, and copied document-source relationships.
+- Grounded chat reloads the current database authorization context on every request, loads at most
+  eight owner-and-conversation-scoped messages plus one bounded rolling summary, and performs
+  memory authorization/source revalidation in a materialized CTE before FTS ranking. Retrieval has
+  separate semantic/episodic limits, a relevance floor, recency/importance/type weighting, a
+  financial-format preference boost, deduplication, and a 2,400-character prompt budget.
+- The existing provider boundary now includes strict structured memory-candidate extraction.
+  The model may propose only; host policy derives the private owner/tenant/company, rejects
+  sensitive/temporary/document-fact candidates, bounds content, applies retention, and owns
+  ADD/NOOP/supersession behavior. Explicit preferences auto-activate; inferred preferences remain
+  pending until owner confirmation. Automatic shared/department memory is impossible.
+- Successful useful grounded responses create private 30-day episodic summaries with the current
+  authorized chunk provenance. Every later read reauthorizes every source; revoked, replaced,
+  rejected, deleted, corrupted, or unauthorized sources hide the episode. Episodes are navigation
+  context only; current document retrieval and citations remain authoritative.
+- `/api/memories` now supports type/status inspection, safe provenance, confirm, dismiss, and
+  owner-only delete. The Memory Inspector shows semantic, episodic, and working-memory sections,
+  owner/scope/origin/status/dates/reason/sources, and pending controls. Grounded Chat shows the
+  non-blocking “Private preference remembered” indicator.
+- Verification: Ruff and strict mypy pass; all 447 backend tests pass; all 135 frontend tests pass;
+  TypeScript/Vite production build passes; focused Alice/Leo, supersession, confirmation, bounded
+  summary, episode creation, and source-revocation tests pass; Alembic upgrade, check, downgrade,
+  and re-upgrade pass.
+
 ## Current step
 
 Playbook Steps 7 through 9 plus all three interview features are implementation-complete. Step 7
@@ -116,7 +201,7 @@ financial calculators whose inputs are reauthorized and whose arithmetic/finaliz
   statically limited to two document tools and three fixed financial calculators, filtered by the
   host shortlist and current capability, and
   rechecked at execution. Raw model arguments are strictly validated before MCP conversion; trusted
-  `AuthorizationScope` is injected through host closures and all five adapters reauthorize through
+  `AuthorizationScope` is injected through host closures and all eleven adapters reauthorize through
   the Step 5 database predicates.
 - Startup validates unique namespaced ownership plus exact input/output schema and capability
   mappings. Unknown/unshortlisted tools, forged scope fields, malformed input/output, missing or
@@ -214,16 +299,18 @@ explicit `NO_MODEL_CALL` sentinel instead of a configured-but-unused model name.
   next request; the application does not replace that snapshot during an in-flight request between
   retrieval or calculator steps.
 
-- Scoped memory is an explicit inspect/create/search/delete facility and optional grounded-chat
-  context. It does not yet provide model-proposed memory candidates, MCP memory tools, automatic
-  transcript memory, or a correction workflow.
+- Memory retrieval currently uses secure PostgreSQL FTS plus deterministic ranking signals. Memory
+  embeddings are intentionally not generated yet: adding a fake vector column/query path would
+  misrepresent semantic retrieval. The repository boundary is ready for a real authorized
+  embedding provider later. The MCP `propose_memory` tool is proposal-only; automatic chat
+  extraction, host policy, and the authenticated HTTP lifecycle remain the only write authorities.
 
 - Agent history and human-approval metadata are metadata-only and owner-scoped. Approval and safe
   resume are implemented; retention/deletion/export and automatic recovery after a consumed
   approval is interrupted remain out of scope.
-- The conversation list is persisted, and message rows are stored, but Step 6 has no message-history
-  read endpoint and sends no prior turns to the model. Scoped memory is explicit and separate; it
-  does not restore earlier transcript turns after reload.
+- The browser loads up to 100 owner-scoped transcript messages per selected conversation. Older
+  messages remain persisted but the UI does not yet paginate beyond that bounded window, and
+  historical messages do not reconstruct their old expandable citation cards.
 - Scope preflight is a conservative bounded regex/token heuristic for recognizable tenant/company
   and department wording. It is defense in depth, not the primary authorization boundary and not a
   complete natural-language entity resolver. Step 5 repository authorization still controls every
@@ -235,8 +322,9 @@ explicit `NO_MODEL_CALL` sentinel instead of a configured-but-unused model name.
 - User questions and controlled assistant answers are intentionally persisted in `messages` as
   conversation content. They are excluded from traces and logs, but there is not yet a retention,
   deletion, export, encryption-at-rest, or content-redaction workflow for conversations.
-- Browser cancellation aborts the client request and suppresses partial UI output, but it is not a
-  guarantee that an already-started upstream/provider or database operation has stopped.
+- Browser cancellation aborts the request; backend generator cleanup cancels the answer task and
+  rolls back the request transaction. An upstream provider may already have received the bounded
+  request before cancellation, so cancellation cannot retract data already sent to that provider.
 - Provider API keys are local environment configuration and the live smoke is a one-case
   connectivity/contract check, not a broad faithfulness, latency, availability, or cost benchmark.
   The fake provider is deterministic test infrastructure, not evidence of live-model quality.

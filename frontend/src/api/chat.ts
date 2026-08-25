@@ -12,10 +12,14 @@ import type {
   ConversationCreateData,
   ConversationData,
   ConversationListData,
+  ConversationMessageData,
+  ConversationMessagesData,
   CreateConversationRequest,
   GroundedAnswerData,
   GroundedCitationData,
   GroundedClaimData,
+  ChatStreamProgress,
+  RequestIntent,
   ResponseMode,
   SendConversationMessageRequest,
 } from '../types/chat'
@@ -27,7 +31,13 @@ import {
   CHAT_QUESTION_MAX_LENGTH,
   CHAT_TITLE_MAX_LENGTH,
 } from '../types/chat'
-import { ApiError, isRecord, requestJson } from './client'
+import {
+  ApiError,
+  apiUrl,
+  isErrorEnvelope,
+  isRecord,
+  requestJson,
+} from './client'
 
 const CONVERSATIONS_PATH = '/api/conversations'
 const ISO_TIMESTAMP =
@@ -58,7 +68,25 @@ const APPROVED_AGENT_ACTION_NAMES = new Set([
   'portfolio.calculate_ebitda_margin',
   'portfolio.calculate_revenue_growth',
   'portfolio.calculate_net_profit_margin',
+  'portfolio.query_financial_metrics',
+  'portfolio.calculate_debt_to_equity',
+  'portfolio.calculate_cash_runway',
+  'portfolio.calculate_cagr',
+  'portfolio.search_memory',
+  'portfolio.propose_memory',
 ])
+const AGENT_PERCEPTION_INTENTS = new Set([
+  'financial_lookup',
+  'legal_lookup',
+  'cross_domain_analysis',
+  'portfolio_comparison',
+  'calculation_required',
+  'memory_recall',
+  'memory_write',
+  'clarification',
+  'unsupported',
+])
+const AGENT_POLICY_DECISIONS = new Set(['NOT_EVALUATED', 'ALLOWED', 'DENIED'])
 const APPROVED_TRACE_REASON_CODES = new Set([
   'ACTION_VALIDATED',
   'AGENT_FAILED_SAFE',
@@ -78,7 +106,9 @@ const APPROVED_TRACE_REASON_CODES = new Set([
   'FINALIZATION_STARTED',
   'INPUT_SCHEMA_REJECTED',
   'INSUFFICIENT_AUTHORIZED_EVIDENCE',
+  'AUTHORIZED_MEMORY_SUMMARIZED',
   'MALFORMED_ACTION',
+  'MEMORY_PROPOSAL_SENT_TO_HOST_POLICY',
   'MAX_REPLANS',
   'MAX_RETRIEVAL_REWRITES',
   'MAX_STEPS',
@@ -307,6 +337,34 @@ function isConversationListData(value: unknown): value is ConversationListData {
   )
 }
 
+function isConversationMessage(
+  value: unknown,
+): value is ConversationMessageData {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ['id', 'role', 'content', 'created_at']) &&
+    isUuid(value.id) &&
+    (value.role === 'user' || value.role === 'assistant') &&
+    isBoundedString(value.content, CHAT_ANSWER_MAX_LENGTH) &&
+    isTimestamp(value.created_at)
+  )
+}
+
+function isConversationMessagesData(
+  value: unknown,
+): value is ConversationMessagesData {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ['messages', 'has_more']) &&
+    Array.isArray(value.messages) &&
+    value.messages.length <= 100 &&
+    value.messages.every(isConversationMessage) &&
+    new Set(value.messages.map((message) => message.id)).size ===
+      value.messages.length &&
+    typeof value.has_more === 'boolean'
+  )
+}
+
 function isConversationCreateData(
   value: unknown,
 ): value is ConversationCreateData {
@@ -325,6 +383,7 @@ function isGroundedAnswerData(value: unknown): value is GroundedAnswerData {
       'user_message_id',
       'assistant_message_id',
       'status',
+      'intent_route',
       'answer',
       'claims',
       'citations',
@@ -339,11 +398,21 @@ function isGroundedAnswerData(value: unknown): value is GroundedAnswerData {
       'latency_ms',
       'estimated_model_cost_usd',
       'pricing_snapshot_date',
+      'memory_notifications',
     ]) ||
     !isUuid(value.conversation_id) ||
     !isUuid(value.user_message_id) ||
     !isUuid(value.assistant_message_id) ||
-    (value.status !== 'grounded' && value.status !== 'insufficient_evidence') ||
+    ![
+      'grounded',
+      'insufficient_evidence',
+      'casual',
+      'memory_recall',
+      'memory_write',
+      'clarification',
+      'refused',
+    ].includes(String(value.status)) ||
+    !isRequestIntent(value.intent_route) ||
     !isBoundedString(value.answer, CHAT_ANSWER_MAX_LENGTH) ||
     !Array.isArray(value.claims) ||
     !value.claims.every(isClaim) ||
@@ -362,12 +431,14 @@ function isGroundedAnswerData(value: unknown): value is GroundedAnswerData {
     !isNullableTokenCount(value.output_tokens) ||
     !isNullableLatency(value.latency_ms) ||
     !isNullableCost(value.estimated_model_cost_usd) ||
-    !isNullablePricingDate(value.pricing_snapshot_date)
+    !isNullablePricingDate(value.pricing_snapshot_date) ||
+    !Array.isArray(value.memory_notifications) ||
+    !value.memory_notifications.every((item) => isBoundedString(item, 120))
   ) {
     return false
   }
 
-  if (value.status === 'insufficient_evidence') {
+  if (value.status !== 'grounded') {
     return value.claims.length === 0 && value.citations.length === 0
   }
   return (
@@ -399,6 +470,20 @@ const SAFE_ROUTE_REASONS = new Set([
 ])
 
 const RESPONSE_MODES = new Set(['fast', 'auto', 'deep'])
+const REQUEST_INTENTS = new Set([
+  'CASUAL',
+  'DOCUMENT_QUESTION',
+  'CONVERSATION_FOLLOW_UP',
+  'MEMORY_RECALL',
+  'MEMORY_WRITE',
+  'CALCULATION',
+  'CLARIFICATION',
+  'REFUSE',
+])
+
+function isRequestIntent(value: unknown): value is RequestIntent {
+  return typeof value === 'string' && REQUEST_INTENTS.has(value)
+}
 
 function isResponseMode(value: unknown): value is ResponseMode {
   return typeof value === 'string' && RESPONSE_MODES.has(value)
@@ -465,7 +550,7 @@ function isCalculationInput(value: unknown): value is CalculationInputData {
     typeof value.value === 'number' &&
     Number.isFinite(value.value) &&
     Math.abs(value.value) <= 1_000_000_000_000 &&
-    value.unit === 'INR crore' &&
+    (value.unit === 'INR crore' || value.unit === 'INR crore/month') &&
     typeof value.citation_id === 'string' &&
     AGENT_EVIDENCE_REFERENCE.test(value.citation_id)
   )
@@ -486,22 +571,28 @@ function isCalculation(value: unknown): value is CalculationData {
       'citation_ids',
     ]) ||
     !isUuid(value.calculation_id) ||
-    !['ebitda_margin', 'revenue_growth', 'net_profit_margin'].includes(
-      String(value.metric),
-    ) ||
+    ![
+      'financial_metric',
+      'ebitda_margin',
+      'revenue_growth',
+      'net_profit_margin',
+      'debt_to_equity',
+      'cash_runway',
+      'cagr',
+    ].includes(String(value.metric)) ||
     typeof value.company_slug !== 'string' ||
     !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.company_slug) ||
     typeof value.period !== 'string' ||
     !/^FY[0-9]{4}$/.test(value.period) ||
     !isBoundedString(value.formula, 400) ||
     !Array.isArray(value.trusted_inputs) ||
-    value.trusted_inputs.length < 2 ||
-    value.trusted_inputs.length > 6 ||
+    value.trusted_inputs.length < 1 ||
+    value.trusted_inputs.length > 10 ||
     !value.trusted_inputs.every(isCalculationInput) ||
     typeof value.result !== 'number' ||
     !Number.isFinite(value.result) ||
     Math.abs(value.result) > 1_000_000 ||
-    value.unit !== 'percent' ||
+    !['percent', 'x', 'months', 'INR crore'].includes(String(value.unit)) ||
     !Array.isArray(value.citation_ids) ||
     !value.citation_ids.every(
       (item) => typeof item === 'string' && AGENT_EVIDENCE_REFERENCE.test(item),
@@ -576,6 +667,11 @@ function isAgentRunData(value: unknown): value is AgentRunData {
       'step_count',
       'replan_count',
       'retry_count',
+      'selected_intent',
+      'policy_decision',
+      'tool_shortlist',
+      'plan_version',
+      'evidence_advanced_goal',
       'trace',
       'model_name',
       'route_reason',
@@ -605,6 +701,26 @@ function isAgentRunData(value: unknown): value is AgentRunData {
     !isSafeCounter(value.step_count) ||
     !isSafeCounter(value.replan_count) ||
     !isSafeCounter(value.retry_count) ||
+    !(
+      value.selected_intent === null ||
+      (typeof value.selected_intent === 'string' &&
+        AGENT_PERCEPTION_INTENTS.has(value.selected_intent))
+    ) ||
+    typeof value.policy_decision !== 'string' ||
+    !AGENT_POLICY_DECISIONS.has(value.policy_decision) ||
+    !Array.isArray(value.tool_shortlist) ||
+    value.tool_shortlist.length > 11 ||
+    !value.tool_shortlist.every(
+      (name) =>
+        typeof name === 'string' && APPROVED_AGENT_ACTION_NAMES.has(name),
+    ) ||
+    new Set(value.tool_shortlist).size !== value.tool_shortlist.length ||
+    !(
+      value.plan_version === null ||
+      value.plan_version === 1 ||
+      value.plan_version === 2
+    ) ||
+    typeof value.evidence_advanced_goal !== 'boolean' ||
     !Array.isArray(value.trace) ||
     !isSafeModelName(value.model_name) ||
     !isSafeRouteReason(value.route_reason) ||
@@ -697,7 +813,8 @@ function isApprovalState(value: unknown): value is AgentApprovalState {
     typeof value.risk_level === 'string' &&
     APPROVAL_RISKS.has(value.risk_level) &&
     (value.resource_type === 'authorized portfolio documents' ||
-      value.resource_type === 'authorized financial data') &&
+      value.resource_type === 'authorized financial data' ||
+      value.resource_type === 'authorized private memory') &&
     (value.estimated_cost_class === 'low' ||
       value.estimated_cost_class === 'standard') &&
     isBoundedString(value.safe_scope_summary, 160) &&
@@ -784,6 +901,7 @@ function validateTitle(title: string | null): CreateConversationRequest {
 function validateMessage(
   content: string,
   responseMode: ResponseMode,
+  clientMessageId?: string,
 ): SendConversationMessageRequest {
   const trimmedContent = content.trim()
   if (!trimmedContent || trimmedContent.length > CHAT_QUESTION_MAX_LENGTH) {
@@ -802,7 +920,20 @@ function validateMessage(
       null,
     )
   }
-  return { content: trimmedContent, response_mode: responseMode }
+  if (clientMessageId !== undefined && !isUuid(clientMessageId)) {
+    throw new ApiError(
+      'Message identifier is invalid.',
+      0,
+      'invalid_client_message_id',
+      null,
+    )
+  }
+  const request: SendConversationMessageRequest = {
+    content: trimmedContent,
+    response_mode: responseMode,
+  }
+  if (clientMessageId !== undefined) request.client_message_id = clientMessageId
+  return request
 }
 
 export async function listConversations(
@@ -831,6 +962,29 @@ export async function createConversation(
     signal,
   })
   if (!isExactEnvelope(response, isConversationCreateData)) {
+    throw invalidResponse(response.request_id ?? null)
+  }
+  return response
+}
+
+export async function listConversationMessages(
+  token: string,
+  conversationId: string,
+  signal?: AbortSignal,
+): Promise<ApiSuccessEnvelope<ConversationMessagesData>> {
+  if (!isUuid(conversationId)) {
+    throw new ApiError(
+      'Select a valid conversation.',
+      0,
+      'invalid_conversation_id',
+      null,
+    )
+  }
+  const response = await requestJson<unknown>(
+    `${CONVERSATIONS_PATH}/${encodeURIComponent(conversationId)}/messages?limit=100`,
+    { token, signal },
+  )
+  if (!isExactEnvelope(response, isConversationMessagesData)) {
     throw invalidResponse(response.request_id ?? null)
   }
   return response
@@ -867,6 +1021,251 @@ export async function sendConversationMessage(
     throw invalidResponse(response.request_id)
   }
   return response
+}
+
+function parseStreamProgress(value: unknown): ChatStreamProgress | null {
+  if (!isRecord(value) || typeof value.type !== 'string') return null
+  if (value.type === 'message.started' && hasOnlyKeys(value, ['type'])) {
+    return { type: 'message.started' }
+  }
+  if (
+    value.type === 'route.selected' &&
+    hasOnlyKeys(value, ['type', 'intent']) &&
+    isRequestIntent(value.intent)
+  ) {
+    return { type: 'route.selected', intent: value.intent }
+  }
+  if (value.type === 'retrieval.started' && hasOnlyKeys(value, ['type'])) {
+    return { type: 'retrieval.started' }
+  }
+  if (
+    value.type === 'retrieval.completed' &&
+    hasOnlyKeys(value, ['type', 'citation_count']) &&
+    typeof value.citation_count === 'number' &&
+    Number.isInteger(value.citation_count) &&
+    value.citation_count >= 0 &&
+    value.citation_count <= 8
+  ) {
+    return {
+      type: 'retrieval.completed',
+      citation_count: value.citation_count,
+    }
+  }
+  if (
+    value.type === 'memory.loaded' &&
+    hasOnlyKeys(value, ['type', 'memory_count']) &&
+    typeof value.memory_count === 'number' &&
+    Number.isInteger(value.memory_count) &&
+    value.memory_count >= 0 &&
+    value.memory_count <= 5
+  ) {
+    return { type: 'memory.loaded', memory_count: value.memory_count }
+  }
+  if (
+    value.type === 'answer.delta' &&
+    hasOnlyKeys(value, ['type', 'delta']) &&
+    isBoundedString(value.delta, 240)
+  ) {
+    return { type: 'answer.delta', delta: value.delta }
+  }
+  if (
+    value.type === 'citation' &&
+    hasOnlyKeys(value, ['type', 'citation']) &&
+    isCitation(value.citation)
+  ) {
+    return { type: 'citation', citation: value.citation }
+  }
+  if (
+    value.type === 'memory.notification' &&
+    hasOnlyKeys(value, ['type', 'message']) &&
+    isBoundedString(value.message, 120)
+  ) {
+    return { type: 'memory.notification', message: value.message }
+  }
+  return null
+}
+
+export async function streamConversationMessage(
+  token: string,
+  conversationId: string,
+  content: string,
+  onEvent: (event: ChatStreamProgress) => void,
+  signal?: AbortSignal,
+  responseMode: ResponseMode = 'auto',
+  clientMessageId: string = crypto.randomUUID(),
+): Promise<GroundedAnswerData> {
+  try {
+    return await streamConversationMessageAttempt(
+      token,
+      conversationId,
+      content,
+      onEvent,
+      signal,
+      responseMode,
+      clientMessageId,
+    )
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw error
+    }
+    if (
+      !(error instanceof TypeError) &&
+      !(error instanceof ApiError && error.code === 'network_error')
+    ) {
+      throw error
+    }
+  }
+
+  // One bounded reconnect uses the same actor-scoped idempotency key. The replay's
+  // message.started event tells the UI to replace any partial validated rendering.
+  try {
+    return await streamConversationMessageAttempt(
+      token,
+      conversationId,
+      content,
+      onEvent,
+      signal,
+      responseMode,
+      clientMessageId,
+    )
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw error
+    }
+    if (
+      error instanceof TypeError ||
+      (error instanceof ApiError && error.code === 'network_error')
+    ) {
+      throw new ApiError(
+        'Unable to reach the backend.',
+        0,
+        'network_error',
+        null,
+      )
+    }
+    throw error
+  }
+}
+
+async function streamConversationMessageAttempt(
+  token: string,
+  conversationId: string,
+  content: string,
+  onEvent: (event: ChatStreamProgress) => void,
+  signal: AbortSignal | undefined,
+  responseMode: ResponseMode,
+  clientMessageId: string,
+): Promise<GroundedAnswerData> {
+  if (!isUuid(conversationId)) {
+    throw new ApiError(
+      'Select a valid conversation.',
+      0,
+      'invalid_conversation_id',
+      null,
+    )
+  }
+  let response: Response
+  try {
+    response = await fetch(
+      apiUrl(
+        `${CONVERSATIONS_PATH}/${encodeURIComponent(conversationId)}/messages/stream`,
+      ),
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/x-ndjson',
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(
+          validateMessage(content, responseMode, clientMessageId),
+        ),
+        signal,
+      },
+    )
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError')
+      throw error
+    throw new ApiError('Unable to reach the backend.', 0, 'network_error', null)
+  }
+  if (!response.ok) {
+    let body: unknown
+    try {
+      body = await response.json()
+    } catch {
+      throw invalidResponse(response.headers.get('X-Request-ID'))
+    }
+    if (isErrorEnvelope(body)) {
+      throw new ApiError(
+        body.error.message,
+        response.status,
+        body.error.code,
+        body.request_id,
+      )
+    }
+    throw invalidResponse(response.headers.get('X-Request-ID'))
+  }
+  if (!response.body)
+    throw invalidResponse(response.headers.get('X-Request-ID'))
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let completed: GroundedAnswerData | null = null
+  let started = false
+  const consumeLine = (line: string) => {
+    if (!line) return
+    let value: unknown
+    try {
+      value = JSON.parse(line)
+    } catch {
+      throw invalidResponse(response.headers.get('X-Request-ID'))
+    }
+    if (isRecord(value) && value.type === 'error') {
+      throw new ApiError(
+        'The response could not be completed safely.',
+        response.status,
+        'stream_failed',
+        response.headers.get('X-Request-ID'),
+      )
+    }
+    if (
+      isRecord(value) &&
+      value.type === 'message.completed' &&
+      hasOnlyKeys(value, ['type', 'result']) &&
+      isGroundedAnswerData(value.result) &&
+      value.result.conversation_id === conversationId &&
+      completed === null
+    ) {
+      completed = value.result
+      return
+    }
+    const progress = parseStreamProgress(value)
+    if (
+      !progress ||
+      completed !== null ||
+      (!started && progress.type !== 'message.started')
+    ) {
+      throw invalidResponse(response.headers.get('X-Request-ID'))
+    }
+    started = true
+    onEvent(progress)
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    buffer += decoder.decode(value, { stream: !done })
+    if (buffer.length > 100_000)
+      throw invalidResponse(response.headers.get('X-Request-ID'))
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    lines.forEach(consumeLine)
+    if (done) break
+  }
+  if (buffer.trim()) consumeLine(buffer.trim())
+  if (completed === null)
+    throw invalidResponse(response.headers.get('X-Request-ID'))
+  return completed
 }
 
 export async function runConversationAgent(

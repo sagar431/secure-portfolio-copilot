@@ -21,11 +21,26 @@ class DeterministicFakeLLMProvider:
         if self.answer is not None:
             answer = self.answer
         elif request.evidence:
+            formatting_preference = next(
+                (
+                    item.content
+                    for item in request.memories
+                    if item.memory_type == "SEMANTIC"
+                    and item.content.startswith("Present financial values in ")
+                ),
+                None,
+            )
+            claim_text = "The retrieved authorized evidence addresses the question."
+            if formatting_preference is not None:
+                claim_text = (
+                    "The retrieved authorized evidence addresses the question. "
+                    + formatting_preference
+                )
             answer = GroundedAnswerDraft(
                 status="supported",
                 claims=(
                     GroundedClaimDraft(
-                        text="The retrieved authorized evidence addresses the question.",
+                        text=claim_text,
                         evidence_ids=(request.evidence[0].evidence_id,),
                     ),
                 ),

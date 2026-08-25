@@ -25,6 +25,12 @@ class ApprovedToolName(StrEnum):
     CALCULATE_EBITDA_MARGIN = "portfolio.calculate_ebitda_margin"
     CALCULATE_REVENUE_GROWTH = "portfolio.calculate_revenue_growth"
     CALCULATE_NET_PROFIT_MARGIN = "portfolio.calculate_net_profit_margin"
+    QUERY_FINANCIAL_METRICS = "portfolio.query_financial_metrics"
+    CALCULATE_DEBT_TO_EQUITY = "portfolio.calculate_debt_to_equity"
+    CALCULATE_CASH_RUNWAY = "portfolio.calculate_cash_runway"
+    CALCULATE_CAGR = "portfolio.calculate_cagr"
+    SEARCH_MEMORY = "portfolio.search_memory"
+    PROPOSE_MEMORY = "portfolio.propose_memory"
 
 
 APPROVED_TOOL_NAMES: frozenset[str] = frozenset(item.value for item in ApprovedToolName)
@@ -72,6 +78,44 @@ class CalculateFinancialMetricInput(StrictGatewayModel):
     reporting_period: str = Field(pattern=r"^FY[0-9]{4}$")
 
 
+class FinancialMetricName(StrEnum):
+    REVENUE = "revenue"
+    EBITDA = "ebitda"
+    NET_PROFIT = "net_profit"
+    CLOSING_CASH = "closing_cash"
+    BANK_DEBT = "bank_debt"
+
+
+class QueryFinancialMetricsInput(CalculateFinancialMetricInput):
+    metric: FinancialMetricName
+
+
+class CalculateCagrInput(StrictGatewayModel):
+    company_slug: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    start_period: str = Field(pattern=r"^FY[0-9]{4}$")
+    end_period: str = Field(pattern=r"^FY[0-9]{4}$")
+    metric: Literal["revenue"] = "revenue"
+
+    @model_validator(mode="after")
+    def ordered_periods(self) -> CalculateCagrInput:
+        if int(self.end_period[2:]) <= int(self.start_period[2:]):
+            raise ValueError("CAGR end period must follow start period")
+        return self
+
+
+class SearchMemoryInput(StrictGatewayModel):
+    query: str = Field(min_length=1, max_length=300)
+    mode: Literal["relevant", "latest_episode"]
+    top_k: int = Field(default=3, ge=1, le=5)
+
+
+class ProposeMemoryInput(StrictGatewayModel):
+    content: str = Field(min_length=1, max_length=500)
+    normalized_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")
+    memory_type: Literal["SEMANTIC"] = "SEMANTIC"
+    explicit: bool
+
+
 class PermittedToolInputField(StrictGatewayModel):
     name: Literal[
         "query",
@@ -80,8 +124,16 @@ class PermittedToolInputField(StrictGatewayModel):
         "chunk_id",
         "company_slug",
         "reporting_period",
+        "metric",
+        "start_period",
+        "end_period",
+        "mode",
+        "content",
+        "normalized_key",
+        "memory_type",
+        "explicit",
     ]
-    value_type: Literal["string", "integer"]
+    value_type: Literal["string", "integer", "boolean"]
     required: bool
     minimum: int | None = None
     maximum: int | None = None
@@ -91,7 +143,7 @@ class PermittedToolInputField(StrictGatewayModel):
 
 
 class PermittedToolInputSchema(StrictGatewayModel):
-    fields: Annotated[tuple[PermittedToolInputField, ...], Field(min_length=2, max_length=2)]
+    fields: Annotated[tuple[PermittedToolInputField, ...], Field(min_length=1, max_length=5)]
     additional_properties: Literal[False] = False
 
     @model_validator(mode="after")
@@ -176,6 +228,26 @@ class CalculationPayload(StrictGatewayModel):
     calculations: Annotated[tuple[CalculationResult, ...], Field(min_length=1, max_length=1)]
 
 
+class MemoryToolItem(StrictGatewayModel):
+    memory_id: UUID
+    memory_type: str = Field(pattern=r"^(?:SEMANTIC|EPISODIC|CONVERSATION_SUMMARY)$")
+    scope: str = Field(pattern=r"^(?:PRIVATE_USER|DEPARTMENT|COMPANY)$")
+    summary: str = Field(min_length=1, max_length=500)
+    source_count: int = Field(ge=0, le=16)
+
+
+class MemorySearchPayload(StrictGatewayModel):
+    memories: Annotated[tuple[MemoryToolItem, ...], Field(max_length=5)]
+
+
+class MemoryProposalPayload(StrictGatewayModel):
+    proposed: Literal[True] = True
+    policy_action: Literal["REVIEW_REQUIRED"] = "REVIEW_REQUIRED"
+    notification: Literal["Memory proposal sent to host policy"] = (
+        "Memory proposal sent to host policy"
+    )
+
+
 class StructuredToolObservation(StrictGatewayModel):
     """Typed gateway result. Only successful results may carry authorized evidence content."""
 
@@ -189,12 +261,20 @@ class StructuredToolObservation(StrictGatewayModel):
     duration_ms: Annotated[int, Field(ge=0)] = 0
     evidence: tuple[ToolEvidence, ...] = ()
     calculations: tuple[CalculationResult, ...] = ()
+    memories: tuple[MemoryToolItem, ...] = ()
+    memory_proposal: MemoryProposalPayload | None = None
 
     @model_validator(mode="after")
     def enforce_payload_shape(self) -> StructuredToolObservation:
-        if self.status != "completed" and (self.evidence or self.calculations):
+        if self.status != "completed" and (
+            self.evidence or self.calculations or self.memories or self.memory_proposal
+        ):
             raise ValueError("Failed tool observations cannot carry payload content")
-        if self.evidence and self.calculations:
+        payload_kinds = sum(
+            bool(item)
+            for item in (self.evidence, self.calculations, self.memories, self.memory_proposal)
+        )
+        if payload_kinds > 1:
             raise ValueError("A tool observation has exactly one payload kind")
         return self
 

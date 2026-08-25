@@ -37,6 +37,11 @@ def classify_tool_risk(tool_name: str) -> ApprovalRiskClass:
         "portfolio.calculate_ebitda_margin",
         "portfolio.calculate_revenue_growth",
         "portfolio.calculate_net_profit_margin",
+        "portfolio.query_financial_metrics",
+        "portfolio.calculate_debt_to_equity",
+        "portfolio.calculate_cash_runway",
+        "portfolio.calculate_cagr",
+        "portfolio.search_memory",
     }:
         return ApprovalRiskClass.LOW_READ_ONLY
     # Future tools are denied by the allowlist; this class also prevents autonomy bypass.

@@ -10,9 +10,11 @@ import type { Capability } from './types/auth'
 
 vi.mock('./api/chat', () => ({
   listConversations: vi.fn(),
+  listConversationMessages: vi.fn(),
   createConversation: vi.fn(),
   runConversationAgent: vi.fn(),
   sendConversationMessage: vi.fn(),
+  streamConversationMessage: vi.fn(),
 }))
 
 function authValue(capabilities: Capability[]): AuthContextValue {
@@ -62,6 +64,10 @@ describe('grounded chat routing', () => {
     vi.mocked(chatApi.listConversations).mockResolvedValue({
       data: { conversations: [conversationData] },
       request_id: 'list-request',
+    })
+    vi.mocked(chatApi.listConversationMessages).mockResolvedValue({
+      data: { messages: [], has_more: false },
+      request_id: 'history-request',
     })
     renderApp(authValue(['QUERY_DOCUMENTS']), '/chat')
 

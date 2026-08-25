@@ -114,34 +114,48 @@ export function GroundedAnswer({
   const citationsById = new Map(
     response.citations.map((citation) => [citation.citation_id, citation]),
   )
+  const answerLabel =
+    response.status === 'casual'
+      ? 'Copilot'
+      : response.status === 'memory_recall'
+        ? 'Private memory/history'
+        : response.status === 'memory_write'
+          ? 'Private memory'
+          : response.status === 'clarification'
+            ? 'Clarification'
+            : response.status === 'refused'
+              ? 'Request refused'
+              : 'Grounded answer'
   return (
     <article className="answer-card">
-      <p className="eyebrow">Grounded answer</p>
+      <p className="eyebrow">{answerLabel}</p>
       <RouteMetadata response={response} />
       {response.fallback_used ? (
         <p className="model-route">Safe fallback used</p>
       ) : null}
       <p className="answer-copy">{response.answer}</p>
-      <section className="supported-claims" aria-label="Supported claims">
-        <h3>Claims and citations</h3>
-        {response.claims.map((claim, index) => (
-          <p key={`${response.assistant_message_id}-${index}`}>
-            <span>{claim.text}</span>{' '}
-            <span className="inline-citation-list">
-              {claim.citation_ids.map((citationId) => {
-                const citation = citationsById.get(citationId)
-                return citation ? (
-                  <CitationButton
-                    key={citationId}
-                    citation={citation}
-                    onOpenEvidence={onOpenEvidence}
-                  />
-                ) : null
-              })}
-            </span>
-          </p>
-        ))}
-      </section>
+      {response.claims.length > 0 ? (
+        <section className="supported-claims" aria-label="Supported claims">
+          <h3>Claims and citations</h3>
+          {response.claims.map((claim, index) => (
+            <p key={`${response.assistant_message_id}-${index}`}>
+              <span>{claim.text}</span>{' '}
+              <span className="inline-citation-list">
+                {claim.citation_ids.map((citationId) => {
+                  const citation = citationsById.get(citationId)
+                  return citation ? (
+                    <CitationButton
+                      key={citationId}
+                      citation={citation}
+                      onOpenEvidence={onOpenEvidence}
+                    />
+                  ) : null
+                })}
+              </span>
+            </p>
+          ))}
+        </section>
+      ) : null}
       {response.limitations.length > 0 ? (
         <section className="answer-limitations" aria-label="Answer limitations">
           <h3>Limitations</h3>

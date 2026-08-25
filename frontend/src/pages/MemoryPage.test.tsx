@@ -9,7 +9,9 @@ import { MemoryPage } from './MemoryPage'
 
 vi.mock('../api/memory', () => ({
   createPrivateMemory: vi.fn(),
+  confirmMemory: vi.fn(),
   deleteMemory: vi.fn(),
+  dismissMemory: vi.fn(),
   inspectMemories: vi.fn(),
 }))
 
@@ -17,14 +19,26 @@ const visibleMemory: MemoryData = {
   id: 'memory-private',
   company_id: 'company-orion',
   scope: 'PRIVATE_USER',
+  memory_type: 'SEMANTIC',
+  origin: 'EXPLICIT_USER',
+  status: 'ACTIVE',
   owner_user_id: 'user-alice',
   department: 'finance',
   visibility: 'DEPARTMENT_PRIVATE',
   classification: 'FINANCE_ONLY',
   content: 'Present values in INR crores.',
+  normalized_key: 'financial_value_format',
+  reason: 'Explicit stable financial presentation preference',
+  confidence: 1,
+  importance: 0.9,
+  owner_display: 'Alice Finance Analyst',
+  tenant_display: 'Orion Capital',
+  company_display: 'orion-main',
+  source_conversation: 'New conversation',
   expires_at: '2026-11-19T00:00:00Z',
   created_at: '2026-08-21T00:00:00Z',
   can_delete: true,
+  can_confirm: false,
   sources: [],
 }
 

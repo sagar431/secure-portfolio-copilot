@@ -7,18 +7,27 @@ from app.calculations.contracts import CalculationMetric
 from app.calculations.engine import CalculationError
 from app.calculations.repository import (
     CalculationAuthorizationError,
+    calculate_authorized_cagr,
     calculate_authorized_metric,
+    query_authorized_financial_metric,
 )
 from app.core.errors import APIError
 from app.embeddings.contracts import EmbeddingProvider
 from app.mcp_gateway.contracts import (
     ApprovedToolName,
+    CalculateCagrInput,
     CalculateFinancialMetricInput,
     CalculationPayload,
     EvidenceLocation,
     GatewayReasonCode,
     GetDocumentExcerptInput,
+    MemoryProposalPayload,
+    MemorySearchPayload,
+    MemoryToolItem,
+    ProposeMemoryInput,
+    QueryFinancialMetricsInput,
     SearchAuthorizedDocumentsInput,
+    SearchMemoryInput,
     ToolEvidence,
     ToolPayload,
 )
@@ -29,8 +38,10 @@ from app.mcp_gateway.errors import (
     ToolTransientError,
 )
 from app.mcp_gateway.gateway import TOOL_MANIFEST
+from app.memory.service import MemoryService
 from app.models.documents import DocumentChunk, DocumentVersion
 from app.models.identity import Capability
+from app.models.memory import Memory
 from app.policies.models import AuthorizationContext, AuthorizationScope
 from app.retrieval.limits import MAX_EXCERPT_CHARACTERS
 from app.retrieval.repository import _authorized_base
@@ -45,6 +56,12 @@ def validate_production_tool_catalog() -> None:
         CalculateEbitdaMarginAdapter,
         CalculateRevenueGrowthAdapter,
         CalculateNetProfitMarginAdapter,
+        QueryFinancialMetricsAdapter,
+        CalculateDebtToEquityAdapter,
+        CalculateCashRunwayAdapter,
+        CalculateCagrAdapter,
+        SearchMemoryAdapter,
+        ProposeMemoryAdapter,
     )
     seen: set[ApprovedToolName] = set()
     for adapter_type in adapter_types:
@@ -246,3 +263,141 @@ class CalculateRevenueGrowthAdapter(_CalculateFinancialMetricAdapter):
 class CalculateNetProfitMarginAdapter(_CalculateFinancialMetricAdapter):
     name = ApprovedToolName.CALCULATE_NET_PROFIT_MARGIN
     metric = CalculationMetric.NET_PROFIT_MARGIN
+
+
+class CalculateDebtToEquityAdapter(_CalculateFinancialMetricAdapter):
+    name = ApprovedToolName.CALCULATE_DEBT_TO_EQUITY
+    metric = CalculationMetric.DEBT_TO_EQUITY
+
+
+class CalculateCashRunwayAdapter(_CalculateFinancialMetricAdapter):
+    name = ApprovedToolName.CALCULATE_CASH_RUNWAY
+    metric = CalculationMetric.CASH_RUNWAY
+
+
+class QueryFinancialMetricsAdapter:
+    name = ApprovedToolName.QUERY_FINANCIAL_METRICS
+    input_model = QueryFinancialMetricsInput
+    output_model = CalculationPayload
+    required_capability = Capability.QUERY_DOCUMENTS
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def invoke(
+        self, *, arguments: object, authorization_scope: AuthorizationScope, request_id: str
+    ) -> object:
+        del request_id
+        if not isinstance(arguments, QueryFinancialMetricsInput):
+            raise TypeError("Gateway input contract mismatch")
+        _require_query_capability(authorization_scope)
+        try:
+            result = await query_authorized_financial_metric(
+                self._session,
+                authorization_scope,
+                metric=arguments.metric,
+                company_slug=arguments.company_slug,
+                period=arguments.reporting_period,
+            )
+        except CalculationAuthorizationError:
+            raise ToolAuthorizationError from None
+        except CalculationError as exc:
+            raise ToolAdapterError(GatewayReasonCode(exc.code.value)) from None
+        return CalculationPayload(calculations=(result,))
+
+
+class CalculateCagrAdapter:
+    name = ApprovedToolName.CALCULATE_CAGR
+    input_model = CalculateCagrInput
+    output_model = CalculationPayload
+    required_capability = Capability.QUERY_DOCUMENTS
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def invoke(
+        self, *, arguments: object, authorization_scope: AuthorizationScope, request_id: str
+    ) -> object:
+        del request_id
+        if not isinstance(arguments, CalculateCagrInput):
+            raise TypeError("Gateway input contract mismatch")
+        _require_query_capability(authorization_scope)
+        try:
+            result = await calculate_authorized_cagr(
+                self._session,
+                authorization_scope,
+                company_slug=arguments.company_slug,
+                start_period=arguments.start_period,
+                end_period=arguments.end_period,
+            )
+        except CalculationAuthorizationError:
+            raise ToolAuthorizationError from None
+        except CalculationError as exc:
+            raise ToolAdapterError(GatewayReasonCode(exc.code.value)) from None
+        return CalculationPayload(calculations=(result,))
+
+
+class SearchMemoryAdapter:
+    name = ApprovedToolName.SEARCH_MEMORY
+    input_model = SearchMemoryInput
+    output_model = MemorySearchPayload
+    required_capability = Capability.QUERY_DOCUMENTS
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._service = MemoryService(session)
+
+    async def invoke(
+        self, *, arguments: object, authorization_scope: AuthorizationScope, request_id: str
+    ) -> object:
+        del request_id
+        if not isinstance(arguments, SearchMemoryInput):
+            raise TypeError("Gateway input contract mismatch")
+        _require_query_capability(authorization_scope)
+        context = AuthorizationContext(
+            identity=authorization_scope.identity, scope=authorization_scope
+        )
+        rows: tuple[Memory, ...]
+        if arguments.mode == "latest_episode":
+            latest = await self._service.latest_episode(context)
+            rows = (latest,) if latest is not None else ()
+        else:
+            rows = await self._service.retrieve_relevant(
+                context,
+                query=arguments.query,
+                semantic_limit=arguments.top_k,
+                episodic_limit=arguments.top_k,
+            )
+            rows = rows[: arguments.top_k]
+        return MemorySearchPayload(
+            memories=tuple(
+                MemoryToolItem(
+                    memory_id=item.id,
+                    memory_type=item.memory_type,
+                    scope=item.scope,
+                    summary=item.content[:500],
+                    source_count=len(item.sources),
+                )
+                for item in rows
+            )
+        )
+
+
+class ProposeMemoryAdapter:
+    """Returns a candidate to the host; it deliberately has no persistence capability."""
+
+    name = ApprovedToolName.PROPOSE_MEMORY
+    input_model = ProposeMemoryInput
+    output_model = MemoryProposalPayload
+    required_capability = Capability.QUERY_DOCUMENTS
+
+    def __init__(self, session: AsyncSession) -> None:
+        del session
+
+    async def invoke(
+        self, *, arguments: object, authorization_scope: AuthorizationScope, request_id: str
+    ) -> object:
+        del request_id
+        if not isinstance(arguments, ProposeMemoryInput):
+            raise TypeError("Gateway input contract mismatch")
+        _require_query_capability(authorization_scope)
+        return MemoryProposalPayload()

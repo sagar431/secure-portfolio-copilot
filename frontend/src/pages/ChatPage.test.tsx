@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -23,9 +24,10 @@ import { ChatPage } from './ChatPage'
 
 vi.mock('../api/chat', () => ({
   listConversations: vi.fn(),
+  listConversationMessages: vi.fn(),
   createConversation: vi.fn(),
   runConversationAgent: vi.fn(),
-  sendConversationMessage: vi.fn(),
+  streamConversationMessage: vi.fn(),
   resolveAgentApproval: vi.fn(),
   stopAgentRun: vi.fn(),
   changeAgentRequest: vi.fn(),
@@ -118,10 +120,13 @@ describe('ChatPage', () => {
       data: { conversation: conversationData },
       request_id: 'conversation-create-request',
     })
-    vi.mocked(chatApi.sendConversationMessage).mockResolvedValue({
-      data: groundedAnswerData,
-      request_id: 'grounded-answer-request',
+    vi.mocked(chatApi.listConversationMessages).mockResolvedValue({
+      data: { messages: [], has_more: false },
+      request_id: 'conversation-messages-request',
     })
+    vi.mocked(chatApi.streamConversationMessage).mockResolvedValue(
+      groundedAnswerData,
+    )
     vi.mocked(chatApi.runConversationAgent).mockResolvedValue({
       data: agentRunData,
       request_id: 'agent-run-request',
@@ -132,11 +137,24 @@ describe('ChatPage', () => {
     renderPage()
 
     expect(
+      screen.getByText(
+        'Hi Alice. Ask about authorized Orion Finance documents, calculations, or recent work.',
+      ),
+    ).toBeVisible()
+    expect(
       await screen.findByRole('button', { name: /Orion finance review/ }),
     ).toHaveAttribute('aria-current', 'page')
     expect(chatApi.listConversations).toHaveBeenCalledWith(
       'signed-alice-token',
       expect.any(AbortSignal),
+    )
+    await waitFor(() =>
+      expect(chatApi.listConversationMessages).toHaveBeenCalled(),
+    )
+    await waitFor(() =>
+      expect(
+        screen.queryByText('Loading recent messages…'),
+      ).not.toBeInTheDocument(),
     )
     fireEvent.click(
       screen.getByRole('button', {
@@ -148,16 +166,123 @@ describe('ChatPage', () => {
     )
   })
 
+  it('loads and renders bounded persisted conversation messages', async () => {
+    vi.mocked(chatApi.listConversationMessages).mockResolvedValueOnce({
+      data: {
+        messages: [
+          {
+            id: '96969696-9696-4696-8696-969696969696',
+            role: 'user',
+            content: 'What was Orion revenue?',
+            created_at: '2026-08-23T12:00:00Z',
+          },
+          {
+            id: '97979797-9797-4797-8797-979797979797',
+            role: 'assistant',
+            content: 'Orion revenue was shown in the authorized report.',
+            created_at: '2026-08-23T12:00:01Z',
+          },
+        ],
+        has_more: false,
+      },
+      request_id: 'conversation-history-request',
+    })
+    renderPage()
+
+    expect(await screen.findByText('What was Orion revenue?')).toBeVisible()
+    expect(
+      screen.getByText('Orion revenue was shown in the authorized report.'),
+    ).toBeVisible()
+    expect(
+      screen.queryByText(/Earlier messages are not loaded/),
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders the deterministic greeting without evidence controls', async () => {
+    vi.mocked(chatApi.streamConversationMessage).mockResolvedValueOnce({
+      ...groundedAnswerData,
+      status: 'casual',
+      intent_route: 'CASUAL',
+      answer:
+        'Hi Alice! I’m ready to help with your authorized Orion Finance work. You can ask about documents, calculations, memories, or continue recent work.',
+      claims: [],
+      citations: [],
+      limitations: [],
+      model_name: null,
+      route_reason: null,
+      resolved_response_mode: null,
+    })
+    renderPage()
+    await screen.findByRole('heading', { name: 'Orion finance review' })
+    submitQuestion('Hello, how are you?')
+
+    expect(await screen.findByText(/Hi Alice! I’m ready to help/)).toBeVisible()
+    expect(screen.getByText('Copilot')).toHaveClass('eyebrow')
+    expect(screen.queryByText('Claims and citations')).not.toBeInTheDocument()
+  })
+
+  it('renders personal-history recall as a compact non-evidentiary answer', async () => {
+    vi.mocked(chatApi.streamConversationMessage).mockResolvedValueOnce({
+      ...groundedAnswerData,
+      status: 'memory_recall',
+      intent_route: 'MEMORY_RECALL',
+      answer:
+        'From your private memory/history: Investigated Orion operating margin. This is historical context, not a current financial conclusion.',
+      claims: [],
+      citations: [],
+      limitations: [
+        'Offer to re-run the investigation against current evidence.',
+      ],
+      model_name: null,
+      route_reason: null,
+      resolved_response_mode: null,
+    })
+    renderPage()
+    await screen.findByRole('heading', { name: 'Orion finance review' })
+    submitQuestion('What did I investigate last time?')
+
+    expect(
+      await screen.findByText(/From your private memory\/history/),
+    ).toBeVisible()
+    expect(screen.getByText('Private memory/history')).toHaveClass('eyebrow')
+    expect(screen.getByText(/not a current financial conclusion/)).toBeVisible()
+    expect(screen.queryByText('Claims and citations')).not.toBeInTheDocument()
+  })
+
+  it('renders a private memory notification as a small status badge', async () => {
+    vi.mocked(chatApi.streamConversationMessage).mockResolvedValueOnce({
+      ...groundedAnswerData,
+      status: 'memory_write',
+      intent_route: 'MEMORY_WRITE',
+      answer: 'I’ll use that private preference in future authorized work.',
+      claims: [],
+      citations: [],
+      limitations: [],
+      model_name: null,
+      route_reason: null,
+      resolved_response_mode: null,
+      memory_notifications: ['Private preference remembered'],
+    })
+    renderPage()
+    await screen.findByRole('heading', { name: 'Orion finance review' })
+    submitQuestion('Remember that I prefer INR crores.')
+
+    const notice = await screen.findByText('Private preference remembered')
+    expect(notice).toHaveClass('memory-notification')
+    expect(notice).toHaveAttribute('role', 'status')
+  })
+
   it('renders grounded claims as inert text and opens exact evidence provenance', async () => {
     renderPage()
     await screen.findByRole('heading', { name: 'Orion finance review' })
     submitQuestion('  Why did margin improve?  ')
 
     await waitFor(() =>
-      expect(chatApi.sendConversationMessage).toHaveBeenCalledWith(
+      expect(chatApi.streamConversationMessage).toHaveBeenCalledWith(
         'signed-alice-token',
         conversationData.id,
         'Why did margin improve?',
+        expect.any(Function),
         expect.any(AbortSignal),
         'auto',
       ),
@@ -213,10 +338,25 @@ describe('ChatPage', () => {
         'balanced',
       ),
     )
-    expect(chatApi.sendConversationMessage).not.toHaveBeenCalled()
+    expect(chatApi.streamConversationMessage).not.toHaveBeenCalled()
     const timeline = screen.getByRole('region', {
       name: 'Bounded orchestration timeline',
     })
+    const disclosure = timeline.querySelector('details')
+    expect(disclosure).not.toHaveAttribute('open')
+    fireEvent.click(
+      within(timeline).getByRole('heading', {
+        name: 'Bounded orchestration timeline',
+      }),
+    )
+    expect(disclosure).toHaveAttribute('open')
+    expect(within(timeline).getByText('Selected intent')).toBeVisible()
+    expect(within(timeline).getByText('financial lookup')).toBeVisible()
+    expect(within(timeline).getByText('Policy decision')).toBeVisible()
+    expect(within(timeline).getByText('ALLOWED')).toBeVisible()
+    expect(within(timeline).getByText('Tool shortlist')).toBeVisible()
+    expect(within(timeline).getByText('Plan version')).toBeVisible()
+    expect(within(timeline).getByText('Evidence advanced goal')).toBeVisible()
     expect(within(timeline).getByText('Session ID')).toBeInTheDocument()
     expect(within(timeline).getByText('Gemini 3.7 Flash')).toBeInTheDocument()
     expect(
@@ -487,18 +627,104 @@ describe('ChatPage', () => {
         expect.any(AbortSignal),
       ),
     )
-    expect(chatApi.sendConversationMessage).toHaveBeenCalledWith(
+    expect(chatApi.streamConversationMessage).toHaveBeenCalledWith(
       'signed-alice-token',
       conversationData.id,
       'Why did margin improve?',
+      expect.any(Function),
       expect.any(AbortSignal),
       'auto',
     )
   })
 
+  it('sends with Enter and preserves Shift+Enter for multiline input', async () => {
+    renderPage()
+    await screen.findByRole('heading', { name: 'Orion finance review' })
+    const composer = screen.getByLabelText('Ask about approved documents')
+    fireEvent.change(composer, { target: { value: 'Explain Orion margin' } })
+
+    fireEvent.keyDown(composer, { key: 'Enter', shiftKey: true })
+    expect(chatApi.streamConversationMessage).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(composer, { key: 'Enter', shiftKey: false })
+    await waitFor(() =>
+      expect(chatApi.streamConversationMessage).toHaveBeenCalledWith(
+        'signed-alice-token',
+        conversationData.id,
+        'Explain Orion margin',
+        expect.any(Function),
+        expect.any(AbortSignal),
+        'auto',
+      ),
+    )
+  })
+
+  it('auto-scrolls a pinned transcript when a new streamed turn starts', async () => {
+    vi.mocked(chatApi.streamConversationMessage).mockImplementation(
+      (_token, _conversationId, _content, _onEvent, signal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () =>
+            reject(new DOMException('Canceled', 'AbortError')),
+          )
+        }),
+    )
+    const { container } = renderPage()
+    await screen.findByRole('heading', { name: 'Orion finance review' })
+    const transcript = container.querySelector('.chat-transcript')
+    expect(transcript).toBeInstanceOf(HTMLDivElement)
+    Object.defineProperty(transcript, 'scrollHeight', {
+      configurable: true,
+      value: 1_000,
+    })
+    Object.defineProperty(transcript, 'clientHeight', {
+      configurable: true,
+      value: 400,
+    })
+    if (!(transcript instanceof HTMLDivElement)) return
+    transcript.scrollTop = 550
+    fireEvent.scroll(transcript)
+
+    submitQuestion()
+    await waitFor(() => expect(transcript.scrollTop).toBe(1_000))
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    await screen.findByText('Request canceled')
+  })
+
+  it('does not steal scroll position after the user scrolls upward', async () => {
+    vi.mocked(chatApi.streamConversationMessage).mockImplementation(
+      (_token, _conversationId, _content, _onEvent, signal) =>
+        new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () =>
+            reject(new DOMException('Canceled', 'AbortError')),
+          )
+        }),
+    )
+    const { container } = renderPage()
+    await screen.findByRole('heading', { name: 'Orion finance review' })
+    const transcript = container.querySelector('.chat-transcript')
+    expect(transcript).toBeInstanceOf(HTMLDivElement)
+    Object.defineProperty(transcript, 'scrollHeight', {
+      configurable: true,
+      value: 1_000,
+    })
+    Object.defineProperty(transcript, 'clientHeight', {
+      configurable: true,
+      value: 400,
+    })
+    if (!(transcript instanceof HTMLDivElement)) return
+    transcript.scrollTop = 100
+    fireEvent.scroll(transcript)
+
+    submitQuestion()
+    await screen.findByRole('button', { name: 'Stop' })
+    expect(transcript.scrollTop).toBe(100)
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    await screen.findByText('Request canceled')
+  })
+
   it('shows and cancels an in-flight generation without rendering a partial answer', async () => {
-    vi.mocked(chatApi.sendConversationMessage).mockImplementation(
-      (_token, _conversationId, _content, signal) =>
+    vi.mocked(chatApi.streamConversationMessage).mockImplementation(
+      (_token, _conversationId, _content, _onEvent, signal) =>
         new Promise((_resolve, reject) => {
           signal?.addEventListener('abort', () => {
             reject(
@@ -512,14 +738,12 @@ describe('ChatPage', () => {
     submitQuestion()
 
     expect(
-      screen.getByText(
-        /Retrieving authorized evidence and validating citations/,
-      ),
+      screen.getAllByText(/Starting secure response/)[0],
     ).toBeInTheDocument()
     expect(
       screen.getByRole('radio', { name: /^Auto Recommended/ }),
     ).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel response' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
 
     expect(await screen.findByText('Request canceled')).toBeInTheDocument()
     expect(
@@ -530,11 +754,43 @@ describe('ChatPage', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('renders a controlled insufficient-evidence state without citation controls', async () => {
-    vi.mocked(chatApi.sendConversationMessage).mockResolvedValueOnce({
-      data: insufficientAnswerData,
-      request_id: 'insufficient-request',
+  it('replaces prior attempt output when a replay stream starts', async () => {
+    let emit: Parameters<typeof chatApi.streamConversationMessage>[3] | null =
+      null
+    vi.mocked(chatApi.streamConversationMessage).mockImplementation(
+      (_token, _conversationId, _content, onEvent, signal) => {
+        emit = onEvent
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => {
+            reject(new DOMException('Canceled', 'AbortError'))
+          })
+        })
+      },
+    )
+    renderPage()
+    await screen.findByRole('heading', { name: 'Orion finance review' })
+    submitQuestion()
+    await waitFor(() => expect(emit).not.toBeNull())
+
+    act(() => {
+      emit?.({ type: 'message.started' })
+      emit?.({ type: 'answer.delta', delta: 'Validated first attempt' })
     })
+    expect(screen.getByText('Validated first attempt')).toBeInTheDocument()
+
+    act(() => emit?.({ type: 'message.started' }))
+    expect(
+      screen.queryByText('Validated first attempt'),
+    ).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(await screen.findByText('Request canceled')).toBeInTheDocument()
+  })
+
+  it('renders a controlled insufficient-evidence state without citation controls', async () => {
+    vi.mocked(chatApi.streamConversationMessage).mockResolvedValueOnce(
+      insufficientAnswerData,
+    )
     renderPage()
     await screen.findByRole('heading', { name: 'Orion finance review' })
     submitQuestion('What is the moon made of?')
@@ -578,7 +834,7 @@ describe('ChatPage', () => {
       null,
     ],
   ])('shows a safe %s card', async (_case, failure, title, requestId) => {
-    vi.mocked(chatApi.sendConversationMessage).mockRejectedValueOnce(failure)
+    vi.mocked(chatApi.streamConversationMessage).mockRejectedValueOnce(failure)
     renderPage()
     await screen.findByRole('heading', { name: 'Orion finance review' })
     submitQuestion()
@@ -608,19 +864,16 @@ describe('ChatPage', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(
       'Enter a question before asking the copilot.',
     )
-    expect(chatApi.sendConversationMessage).not.toHaveBeenCalled()
+    expect(chatApi.streamConversationMessage).not.toHaveBeenCalled()
   })
 
   it('defaults to Auto and sends the user-selected response mode', async () => {
-    vi.mocked(chatApi.sendConversationMessage).mockResolvedValueOnce({
-      data: {
-        ...groundedAnswerData,
-        requested_response_mode: 'deep',
-        resolved_response_mode: 'deep',
-        model_name: 'Gemini 3.7 Flash',
-        route_reason: 'USER_REQUESTED_DEEP',
-      },
-      request_id: 'deep-answer-request',
+    vi.mocked(chatApi.streamConversationMessage).mockResolvedValueOnce({
+      ...groundedAnswerData,
+      requested_response_mode: 'deep',
+      resolved_response_mode: 'deep',
+      model_name: 'Gemini 3.7 Flash',
+      route_reason: 'USER_REQUESTED_DEEP',
     })
     renderPage()
     await screen.findByRole('heading', { name: 'Orion finance review' })
@@ -644,10 +897,11 @@ describe('ChatPage', () => {
     submitQuestion()
 
     await waitFor(() =>
-      expect(chatApi.sendConversationMessage).toHaveBeenCalledWith(
+      expect(chatApi.streamConversationMessage).toHaveBeenCalledWith(
         'signed-alice-token',
         conversationData.id,
         'Why did margin improve?',
+        expect.any(Function),
         expect.any(AbortSignal),
         'deep',
       ),
@@ -663,7 +917,7 @@ describe('ChatPage', () => {
   })
 
   it('renders a safe Fast upgrade card and resubmits only after Continue with Deep', async () => {
-    vi.mocked(chatApi.sendConversationMessage).mockRejectedValueOnce(
+    vi.mocked(chatApi.streamConversationMessage).mockRejectedValueOnce(
       new ApiError(
         'provider details must not be rendered',
         409,
@@ -682,24 +936,25 @@ describe('ChatPage', () => {
       }),
     ).toBeInTheDocument()
     expect(screen.queryByText(/provider details/)).not.toBeInTheDocument()
-    expect(chatApi.sendConversationMessage).toHaveBeenCalledTimes(1)
+    expect(chatApi.streamConversationMessage).toHaveBeenCalledTimes(1)
 
     fireEvent.click(screen.getByRole('button', { name: 'Continue with Deep' }))
 
     await waitFor(() =>
-      expect(chatApi.sendConversationMessage).toHaveBeenLastCalledWith(
+      expect(chatApi.streamConversationMessage).toHaveBeenLastCalledWith(
         'signed-alice-token',
         conversationData.id,
         'Compare Orion revenue across documents.',
+        expect.any(Function),
         expect.any(AbortSignal),
         'deep',
       ),
     )
-    expect(chatApi.sendConversationMessage).toHaveBeenCalledTimes(2)
+    expect(chatApi.streamConversationMessage).toHaveBeenCalledTimes(2)
   })
 
   it('cancels a Fast upgrade without making another request', async () => {
-    vi.mocked(chatApi.sendConversationMessage).mockRejectedValueOnce(
+    vi.mocked(chatApi.streamConversationMessage).mockRejectedValueOnce(
       new ApiError('safe', 409, 'deep_mode_required', 'upgrade-request'),
     )
     renderPage()
@@ -713,6 +968,6 @@ describe('ChatPage', () => {
     expect(
       screen.queryByRole('button', { name: 'Continue with Deep' }),
     ).not.toBeInTheDocument()
-    expect(chatApi.sendConversationMessage).toHaveBeenCalledTimes(1)
+    expect(chatApi.streamConversationMessage).toHaveBeenCalledTimes(1)
   })
 })

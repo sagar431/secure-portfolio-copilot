@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from typing import cast
 from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,11 +28,19 @@ from app.agent.models import (
     TraceEventType,
     TraceStatus,
 )
-from app.chat.repository import add_message, add_trace, get_owned_conversation
+from app.chat.contracts import GroundedMemory, GroundedWorkingMessage
+from app.chat.repository import (
+    add_message,
+    add_trace,
+    get_owned_conversation,
+    load_bounded_conversation_messages,
+)
 from app.chat.scope_guard import request_matches_authorized_scope, resolve_home_tenant_id
 from app.core.errors import APIError
 from app.mcp_gateway.contracts import APPROVED_TOOL_NAMES
 from app.mcp_gateway.gateway import ApprovedToolGateway
+from app.memory.contracts import CandidateAction, MemoryCandidate
+from app.memory.service import MemoryService
 from app.model_routing import ResponseMode, RoutingSignals, WorkloadKind, route_model
 from app.models.agent_runs import AgentControlMode, AgentRun, AgentRunStatus
 from app.models.chat import Message
@@ -42,7 +51,12 @@ from app.schemas.agent_runs import (
     AwaitingApprovalData,
     RemainingApprovalBudgetData,
 )
-from app.schemas.chat import AgentRunMessageData, AgentTraceEventData, safe_model_name
+from app.schemas.chat import (
+    AgentRunMessageData,
+    AgentTraceEventData,
+    SafeAgentToolName,
+    safe_model_name,
+)
 
 logger = logging.getLogger("app.agent.audit")
 
@@ -53,6 +67,12 @@ _ACTION_LABELS = {
     "portfolio.calculate_ebitda_margin": "Calculate EBITDA margin",
     "portfolio.calculate_revenue_growth": "Calculate revenue growth",
     "portfolio.calculate_net_profit_margin": "Calculate net profit margin",
+    "portfolio.query_financial_metrics": "Query authorized financial metrics",
+    "portfolio.calculate_debt_to_equity": "Calculate debt-to-equity",
+    "portfolio.calculate_cash_runway": "Calculate cash runway",
+    "portfolio.calculate_cagr": "Calculate CAGR",
+    "portfolio.search_memory": "Search authorized private memory",
+    "portfolio.propose_memory": "Propose a private memory",
 }
 
 
@@ -66,6 +86,7 @@ class AgentRunService:
         model_name: str,
         route_reason_code: str,
         low_confidence_threshold: float = 0.55,
+        max_recent_messages: int = 8,
     ) -> None:
         self._session = session
         self._loop = loop
@@ -73,6 +94,8 @@ class AgentRunService:
         self._model_name = model_name
         self._route_reason_code = route_reason_code
         self._low_confidence_threshold = low_confidence_threshold
+        self._max_recent_messages = max_recent_messages
+        self._memory_service = MemoryService(session)
 
     async def _mark_run_terminal(
         self,
@@ -153,6 +176,8 @@ class AgentRunService:
         route_reason_code = "NO_MODEL_CALL"
         resolved_response_mode: ResponseMode | None = None
         request_scope_allowed = request_matches_authorized_scope(context, question)
+        recent_messages: tuple[GroundedWorkingMessage, ...] = ()
+        conversation_summary: str | None = None
         if request_scope_allowed:
             routing_decision = route_model(
                 RoutingSignals(WorkloadKind.AGENTIC, question, 0, None),
@@ -167,6 +192,24 @@ class AgentRunService:
                 )
             route_reason_code = routing_decision.reason.value
             resolved_response_mode = routing_decision.resolved_response_mode
+            recent_rows = await load_bounded_conversation_messages(
+                self._session,
+                conversation_id=conversation.id,
+                tenant_id=tenant_id,
+                user_id=context.identity.user_id,
+                limit=self._max_recent_messages + 1,
+            )
+            if resume_run is not None and resume_run.initial_user_message_id is not None:
+                recent_rows = tuple(
+                    item for item in recent_rows if item.id != resume_run.initial_user_message_id
+                )
+            recent_messages = tuple(
+                GroundedWorkingMessage(role=item.role, content=item.content[:500])  # type: ignore[arg-type]
+                for item in recent_rows[-self._max_recent_messages :]
+            )
+            conversation_summary = await self._memory_service.get_conversation_summary(
+                context, conversation_id=conversation.id
+            )
 
         if resume_run is None:
             run_record = await create_run(
@@ -237,6 +280,21 @@ class AgentRunService:
                 permitted_tool_catalog = self._gateway.permitted_catalog(
                     context.scope, APPROVED_TOOL_NAMES
                 )
+                memory_rows = await self._memory_service.retrieve_relevant(
+                    context,
+                    query=question,
+                    semantic_limit=3,
+                    episodic_limit=2,
+                )
+                memories = tuple(
+                    GroundedMemory(
+                        memory_id=item.id,
+                        scope=item.scope,
+                        memory_type=item.memory_type,
+                        content=item.content[:500],
+                    )
+                    for item in memory_rows[:5]
+                )
                 outcome = await self._loop.run(
                     query=question,
                     authorization_context=context,
@@ -246,7 +304,48 @@ class AgentRunService:
                     agent_control_mode=agent_control_mode,
                     approved_action_hash=approved_action_hash,
                     reconstructed_steps=reconstructed_steps,
+                    memories=memories,
+                    recent_messages=recent_messages,
+                    conversation_summary=conversation_summary,
                 )
+                if outcome.memory_proposal is not None:
+                    company_ids = {
+                        company_id
+                        for grant in context.scope.grants
+                        if Capability.QUERY_DOCUMENTS in grant.capabilities
+                        for company_id in grant.company_ids
+                    }
+                    notifications: tuple[str, ...] = ()
+                    if len(company_ids) == 1:
+                        proposal = outcome.memory_proposal
+                        notifications = await self._memory_service.apply_semantic_candidates(
+                            context,
+                            candidates=(
+                                MemoryCandidate(
+                                    memory_type=proposal.memory_type,
+                                    action=CandidateAction.ADD,
+                                    content=proposal.content,
+                                    normalized_key=proposal.normalized_key,
+                                    confidence=1.0 if proposal.explicit else 0.7,
+                                    importance=0.7,
+                                    sensitivity="LOW",
+                                    reason="Agent proposal accepted by host memory policy",
+                                    explicit=proposal.explicit,
+                                ),
+                            ),
+                            company_id=next(iter(company_ids)),
+                            conversation_id=conversation.id,
+                            source_message_id=user_message.id,
+                        )
+                    outcome = outcome.model_copy(
+                        update={
+                            "answer": (
+                                notifications[0]
+                                if notifications
+                                else "The host memory policy rejected that proposal."
+                            )
+                        }
+                    )
             assistant_message = await add_message(
                 self._session,
                 conversation=conversation,
@@ -335,8 +434,15 @@ class AgentRunService:
                     tool_name=action.action_name,
                     risk_level=pending.risk_class,
                     resource_type=(
-                        "authorized financial data"
+                        "authorized private memory"
+                        if action.action_name
+                        in {
+                            "portfolio.search_memory",
+                            "portfolio.propose_memory",
+                        }
+                        else "authorized financial data"
                         if ".calculate_" in action.action_name
+                        or action.action_name == "portfolio.query_financial_metrics"
                         else "authorized portfolio documents"
                     ),
                     estimated_cost_class="low",
@@ -385,6 +491,7 @@ class AgentRunService:
             ),
             status=trace_status,
             reason_code=outcome.stopping_reason.value.upper(),
+            intent_route="AGENT",
             document_ids=tuple(dict.fromkeys(item.document_id for item in outcome.citations)),
             chunk_ids=tuple(item.chunk_id for item in outcome.citations),
             input_tokens=outcome.input_tokens,
@@ -473,6 +580,11 @@ class AgentRunService:
             step_count=outcome.step_count,
             replan_count=outcome.replan_count,
             retry_count=outcome.retry_count,
+            selected_intent=(outcome.selected_intent.value if outcome.selected_intent else None),
+            policy_decision=outcome.policy_decision,
+            tool_shortlist=cast(tuple[SafeAgentToolName, ...], outcome.tool_shortlist),
+            plan_version=outcome.plan_version,
+            evidence_advanced_goal=outcome.evidence_advanced_goal,
             trace=tuple(
                 AgentTraceEventData.model_validate(item.model_dump(mode="json"))
                 for item in outcome.trace

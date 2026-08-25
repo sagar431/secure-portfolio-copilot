@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -65,6 +66,11 @@ class ChatRequestTrace(Base):
             "status IN ('grounded', 'insufficient_evidence', 'provider_error')",
             name="ck_chat_request_traces_status",
         ),
+        CheckConstraint(
+            "intent_route IN ('CASUAL','DOCUMENT_QUESTION','CONVERSATION_FOLLOW_UP',"
+            "'MEMORY_RECALL','MEMORY_WRITE','CALCULATION','CLARIFICATION','REFUSE','AGENT')",
+            name="ck_chat_request_traces_intent_route",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
@@ -77,6 +83,9 @@ class ChatRequestTrace(Base):
     model_name: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     reason_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    intent_route: Mapped[str] = mapped_column(
+        String(32), default="DOCUMENT_QUESTION", nullable=False
+    )
     retrieved_document_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     retrieved_chunk_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     input_tokens: Mapped[int | None] = mapped_column(Integer)
@@ -91,3 +100,32 @@ class ChatRequestTrace(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class ChatMessageRequest(TimestampMixin, Base):
+    """Actor-scoped replay record containing only a validated public response."""
+
+    __tablename__ = "chat_message_requests"
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id",
+            "user_id",
+            "client_message_id",
+            name="uq_chat_message_requests_actor_client_message",
+        ),
+        CheckConstraint(
+            "status IN ('PENDING','COMPLETED','FAILED')",
+            name="ck_chat_message_requests_status",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    conversation_id: Mapped[UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tenant_id: Mapped[UUID] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    client_message_id: Mapped[UUID] = mapped_column(nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    response_payload: Mapped[dict[str, object] | None] = mapped_column(JSON)

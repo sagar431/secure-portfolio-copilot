@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, status
@@ -51,8 +51,13 @@ async def inspect_memories(
     request: Request,
     context: CurrentAuthorizationContext,
     service: MemoryServiceDependency,
+    memory_type: Literal["SEMANTIC", "EPISODIC", "CONVERSATION_SUMMARY"] | None = None,
+    memory_status: Literal["PENDING_CONFIRMATION", "ACTIVE", "SUPERSEDED"] | None = None,
 ) -> SuccessResponse[MemoryListData]:
-    return SuccessResponse(data=await service.inspect(context), request_id=request.state.request_id)
+    return SuccessResponse(
+        data=await service.inspect(context, memory_type=memory_type, status=memory_status),
+        request_id=request.state.request_id,
+    )
 
 
 @router.post("/search", response_model=SuccessResponse[MemoryListData])
@@ -77,5 +82,31 @@ async def delete_memory(
 ) -> SuccessResponse[DeletedMemoryData]:
     return SuccessResponse(
         data=await service.delete(context, memory_id=memory_id),
+        request_id=request.state.request_id,
+    )
+
+
+@router.post("/{memory_id}/confirm", response_model=SuccessResponse[MemoryData])
+async def confirm_memory(
+    memory_id: UUID,
+    request: Request,
+    context: CurrentAuthorizationContext,
+    service: MemoryServiceDependency,
+) -> SuccessResponse[MemoryData]:
+    return SuccessResponse(
+        data=await service.confirm(context, memory_id=memory_id),
+        request_id=request.state.request_id,
+    )
+
+
+@router.post("/{memory_id}/dismiss", response_model=SuccessResponse[DeletedMemoryData])
+async def dismiss_memory(
+    memory_id: UUID,
+    request: Request,
+    context: CurrentAuthorizationContext,
+    service: MemoryServiceDependency,
+) -> SuccessResponse[DeletedMemoryData]:
+    return SuccessResponse(
+        data=await service.dismiss(context, memory_id=memory_id),
         request_id=request.state.request_id,
     )

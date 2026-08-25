@@ -19,6 +19,7 @@ from app.agent.openrouter_vertex import (
     OpenRouterVertexPerceptionProvider,
 )
 from app.agent.rule_based_fake import RuleBasedFakeAgentProvider
+from app.chat.contracts import GroundedAgentContext
 from app.core.config import Settings
 from app.mcp_gateway.contracts import PermittedToolDescriptor
 from app.model_routing import RouteReason
@@ -27,6 +28,9 @@ from app.openrouter_vertex import OpenRouterVertexClient
 
 class DisabledAgentProvider:
     model_name = "disabled-agent-stages"
+
+    def bind_request_context(self, context: GroundedAgentContext) -> None:
+        del context
 
     @staticmethod
     def _disabled() -> NoReturn:

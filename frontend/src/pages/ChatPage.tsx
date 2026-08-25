@@ -4,10 +4,11 @@ import { ApiError } from '../api/client'
 import {
   createConversation,
   changeAgentRequest,
+  listConversationMessages,
   listConversations,
   resolveAgentApproval,
   runConversationAgent,
-  sendConversationMessage,
+  streamConversationMessage,
   stopAgentRun,
 } from '../api/chat'
 import { useAuth } from '../auth/useAuth'
@@ -22,8 +23,10 @@ import type {
   AwaitingAgentApprovalData,
   ChatTurn,
   ConversationData,
+  ConversationMessageData,
   GroundedAnswerData,
   GroundedCitationData,
+  ChatStreamProgress,
   ResponseMode,
 } from '../types/chat'
 import { CHAT_QUESTION_MAX_LENGTH } from '../types/chat'
@@ -149,6 +152,7 @@ function agentAnswer(run: AgentRunData): GroundedAnswerData {
     user_message_id: run.user_message_id,
     assistant_message_id: run.assistant_message_id,
     status: hasGroundedClaims ? 'grounded' : 'insufficient_evidence',
+    intent_route: 'DOCUMENT_QUESTION',
     answer: run.answer,
     claims: run.claims,
     citations: run.citations,
@@ -163,6 +167,7 @@ function agentAnswer(run: AgentRunData): GroundedAnswerData {
     latency_ms: null,
     estimated_model_cost_usd: null,
     pricing_snapshot_date: null,
+    memory_notifications: [],
   }
 }
 
@@ -173,6 +178,10 @@ export function ChatPage() {
   const [turnsByConversation, setTurnsByConversation] = useState<
     Record<string, ChatTurn[]>
   >({})
+  const [historyByConversation, setHistoryByConversation] = useState<
+    Record<string, ConversationMessageData[]>
+  >({})
+  const [historyLoading, setHistoryLoading] = useState(false)
   const [question, setQuestion] = useState('')
   const [responseMode, setResponseMode] = useState<ResponseMode>('auto')
   const [agentControlMode, setAgentControlMode] =
@@ -188,6 +197,14 @@ export function ChatPage() {
   const [sending, setSending] = useState(false)
   const [sendingMode, setSendingMode] = useState<SubmissionMode>('grounded')
   const [canceled, setCanceled] = useState(false)
+  const [streamingTurn, setStreamingTurn] = useState<{
+    conversationId: string
+    question: string
+    answer: string
+    progress: string
+    citations: GroundedCitationData[]
+    notifications: string[]
+  } | null>(null)
   const [error, setError] = useState<SafeError | null>(null)
   const [upgradeRequest, setUpgradeRequest] = useState<UpgradeRequest | null>(
     null,
@@ -196,8 +213,76 @@ export function ChatPage() {
     null,
   )
   const activeRequest = useRef<AbortController | null>(null)
+  const transcriptRef = useRef<HTMLDivElement | null>(null)
+  const transcriptPinned = useRef(true)
 
   const closeEvidence = useCallback(() => setOpenCitation(null), [])
+
+  useEffect(() => {
+    if (transcriptPinned.current && transcriptRef.current) {
+      transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight
+    }
+  }, [turnsByConversation, streamingTurn, error, pendingApproval])
+
+  const handleStreamEvent = useCallback((event: ChatStreamProgress) => {
+    setStreamingTurn((current) => {
+      if (!current) return current
+      if (event.type === 'message.started') {
+        return {
+          ...current,
+          answer: '',
+          citations: [],
+          notifications: [],
+          progress: 'Routing request safely…',
+        }
+      }
+      if (event.type === 'answer.delta') {
+        return { ...current, answer: current.answer + event.delta }
+      }
+      if (event.type === 'route.selected') {
+        return {
+          ...current,
+          progress:
+            event.intent === 'CASUAL'
+              ? 'Responding…'
+              : event.intent.startsWith('MEMORY_')
+                ? 'Loading authorized private memory…'
+                : 'Validating authorized evidence…',
+        }
+      }
+      if (event.type === 'retrieval.completed') {
+        return {
+          ...current,
+          progress:
+            event.citation_count > 0
+              ? `Validated ${event.citation_count} source${event.citation_count === 1 ? '' : 's'}…`
+              : 'Preparing validated response…',
+        }
+      }
+      if (event.type === 'retrieval.started') {
+        return { ...current, progress: 'Searching authorized documents…' }
+      }
+      if (event.type === 'memory.loaded') {
+        return {
+          ...current,
+          progress:
+            event.memory_count > 0
+              ? `Loaded ${event.memory_count} authorized memory item${event.memory_count === 1 ? '' : 's'}…`
+              : 'Preparing validated response…',
+        }
+      }
+      if (event.type === 'citation') {
+        return { ...current, citations: [...current.citations, event.citation] }
+      }
+      if (event.type === 'memory.notification') {
+        return {
+          ...current,
+          notifications: [...current.notifications, event.message],
+        }
+      }
+      return { ...current, progress: 'Routing request safely…' }
+    })
+  }, [])
 
   useEffect(() => {
     if (!auth.accessToken) {
@@ -223,6 +308,40 @@ export function ChatPage() {
     return () => controller.abort()
   }, [auth.accessToken])
 
+  useEffect(() => {
+    if (
+      !auth.accessToken ||
+      !selectedId ||
+      Object.hasOwn(historyByConversation, selectedId)
+    ) {
+      return
+    }
+    const controller = new AbortController()
+    setHistoryLoading(true)
+    void listConversationMessages(
+      auth.accessToken,
+      selectedId,
+      controller.signal,
+    )
+      .then((response) => {
+        setHistoryByConversation((current) => ({
+          ...current,
+          [selectedId]: response.data.messages,
+        }))
+      })
+      .catch((historyError: unknown) => {
+        if (
+          historyError instanceof DOMException &&
+          historyError.name === 'AbortError'
+        ) {
+          return
+        }
+        setError(safeError(historyError))
+      })
+      .finally(() => setHistoryLoading(false))
+    return () => controller.abort()
+  }, [auth.accessToken, historyByConversation, selectedId])
+
   useEffect(
     () => () => {
       activeRequest.current?.abort()
@@ -247,6 +366,10 @@ export function ChatPage() {
         ...current.filter((item) => item.id !== conversation.id),
       ])
       setSelectedId(conversation.id)
+      setHistoryByConversation((current) => ({
+        ...current,
+        [conversation.id]: [],
+      }))
       setQuestion('')
     } catch (createError) {
       setError(safeError(createError))
@@ -333,18 +456,28 @@ export function ChatPage() {
           }
         }
       } else {
-        turn = await sendConversationMessage(
+        setStreamingTurn({
+          conversationId: targetConversationId,
+          question: content,
+          answer: '',
+          progress: 'Starting secure response…',
+          citations: [],
+          notifications: [],
+        })
+        const response = await streamConversationMessage(
           auth.accessToken,
           targetConversationId,
           content,
+          handleStreamEvent,
           controller.signal,
           responseMode,
-        ).then((response) => ({
+        )
+        turn = {
           kind: 'grounded' as const,
-          id: response.data.assistant_message_id,
+          id: response.assistant_message_id,
           question: content,
-          response: response.data,
-        }))
+          response,
+        }
       }
       if (turn) {
         setTurnsByConversation((current) => ({
@@ -354,6 +487,19 @@ export function ChatPage() {
             turn,
           ],
         }))
+        if (
+          turn.kind === 'grounded' &&
+          turn.response.intent_route !== 'CASUAL'
+        ) {
+          setConversations((current) =>
+            current.map((item) =>
+              item.id === targetConversationId &&
+              item.title === 'New conversation'
+                ? { ...item, title: content.slice(0, 64) }
+                : item,
+            ),
+          )
+        }
       }
       setQuestion('')
     } catch (requestError) {
@@ -378,6 +524,7 @@ export function ChatPage() {
       if (activeRequest.current === controller) {
         activeRequest.current = null
         setSending(false)
+        setStreamingTurn(null)
       }
     }
   }
@@ -529,18 +676,27 @@ export function ChatPage() {
           }
         }
       } else {
-        const response = await sendConversationMessage(
+        setStreamingTurn({
+          conversationId: upgradeRequest.conversationId,
+          question: upgradeRequest.content,
+          answer: '',
+          progress: 'Starting secure response…',
+          citations: [],
+          notifications: [],
+        })
+        const response = await streamConversationMessage(
           auth.accessToken,
           upgradeRequest.conversationId,
           upgradeRequest.content,
+          handleStreamEvent,
           controller.signal,
           'deep',
         )
         turn = {
           kind: 'grounded',
-          id: response.data.assistant_message_id,
+          id: response.assistant_message_id,
           question: upgradeRequest.content,
-          response: response.data,
+          response,
         }
       }
       if (turn) {
@@ -567,6 +723,7 @@ export function ChatPage() {
       if (activeRequest.current === controller) {
         activeRequest.current = null
         setSending(false)
+        setStreamingTurn(null)
       }
     }
   }
@@ -575,6 +732,30 @@ export function ChatPage() {
     (conversation) => conversation.id === selectedId,
   )
   const turns = selectedId ? (turnsByConversation[selectedId] ?? []) : []
+  const liveMessageIds = new Set(
+    turns.flatMap((turn) => [
+      turn.response.user_message_id,
+      turn.response.assistant_message_id,
+    ]),
+  )
+  const history = selectedId
+    ? (historyByConversation[selectedId] ?? []).filter(
+        (message) => !liveMessageIds.has(message.id),
+      )
+    : []
+  const hasMessages = history.length > 0 || turns.length > 0
+  const firstName =
+    auth.currentUser?.identity.display_name.split(/\s+/)[0] ?? 'there'
+  const primaryGrant = auth.currentUser?.authorization_scope.grants[0]
+  const workspaceLabel = primaryGrant?.workspace.slug
+    ? primaryGrant.workspace.slug.charAt(0).toUpperCase() +
+      primaryGrant.workspace.slug.slice(1)
+    : 'your workspace'
+  const departmentLabel = primaryGrant?.query_departments[0]
+    ? primaryGrant.query_departments[0].charAt(0).toUpperCase() +
+      primaryGrant.query_departments[0].slice(1)
+    : ''
+  const authorizedArea = `${workspaceLabel}${departmentLabel ? ` ${departmentLabel}` : ''}`
 
   return (
     <div className="chat-page">
@@ -662,63 +843,132 @@ export function ChatPage() {
             </span>
           </div>
 
-          <div className="suggested-questions">
-            <p>Suggested questions</p>
-            <div>
-              {SUGGESTED_QUESTIONS.map((suggestion) => (
-                <button
-                  key={suggestion}
-                  type="button"
-                  disabled={sending}
-                  onClick={() => setQuestion(suggestion)}
-                >
-                  {suggestion}
-                </button>
-              ))}
+          {!hasMessages && !streamingTurn ? (
+            <div className="suggested-questions">
+              <p className="welcome-copy">
+                Hi {firstName}. Ask about authorized {authorizedArea} documents,
+                calculations, or recent work.
+              </p>
+              <p>Suggested questions</p>
+              <div>
+                {SUGGESTED_QUESTIONS.map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    disabled={sending}
+                    onClick={() => setQuestion(suggestion)}
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          ) : null}
 
-          <div className="chat-transcript" aria-live="polite">
-            {turns.length === 0 ? (
+          <div
+            className="chat-transcript"
+            aria-live="polite"
+            ref={transcriptRef}
+            onScroll={(event) => {
+              const node = event.currentTarget
+              transcriptPinned.current =
+                node.scrollHeight - node.scrollTop - node.clientHeight < 80
+            }}
+          >
+            {historyLoading && history.length === 0 ? (
+              <div className="empty-state" role="status">
+                Loading recent messages…
+              </div>
+            ) : !hasMessages ? (
               <div className="empty-state">
                 {selectedConversation
-                  ? 'This persisted conversation is ready for a new question. Earlier messages are not loaded by the Step 6 API.'
+                  ? 'This conversation is ready for a new question.'
                   : 'Choose a suggestion or enter a question. A private conversation will be created automatically.'}
               </div>
             ) : (
-              turns.map((turn) => (
-                <div className="chat-turn" key={turn.id}>
-                  <article className="question-card">
-                    <p className="eyebrow">You</p>
-                    <p>{turn.question}</p>
-                  </article>
-                  <GroundedAnswer
-                    response={
-                      turn.kind === 'agent'
-                        ? agentAnswer(turn.response)
-                        : turn.response
+              <>
+                {history.map((message) => (
+                  <article
+                    className={
+                      message.role === 'user'
+                        ? 'question-card history-message'
+                        : 'answer-card history-message'
                     }
-                    onOpenEvidence={setOpenCitation}
-                  />
-                  {turn.kind === 'agent'
-                    ? turn.response.calculations.map((calculation) => (
-                        <CalculationCard
-                          key={calculation.calculation_id}
-                          calculation={calculation}
-                          citations={turn.response.citations}
-                          onOpenEvidence={setOpenCitation}
-                        />
-                      ))
-                    : null}
-                  {turn.kind === 'agent' ? (
-                    <AgentTraceTimeline
-                      run={turn.response}
+                    key={message.id}
+                  >
+                    <p className="eyebrow">
+                      {message.role === 'user' ? 'You' : 'Copilot'}
+                    </p>
+                    <p>{message.content}</p>
+                  </article>
+                ))}
+                {turns.map((turn) => (
+                  <div className="chat-turn" key={turn.id}>
+                    <article className="question-card">
+                      <p className="eyebrow">You</p>
+                      <p>{turn.question}</p>
+                    </article>
+                    <GroundedAnswer
+                      response={
+                        turn.kind === 'agent'
+                          ? agentAnswer(turn.response)
+                          : turn.response
+                      }
                       onOpenEvidence={setOpenCitation}
                     />
-                  ) : null}
-                </div>
-              ))
+                    {turn.kind === 'grounded'
+                      ? turn.response.memory_notifications.map(
+                          (notification) => (
+                            <p
+                              className="memory-notification"
+                              role="status"
+                              key={notification}
+                            >
+                              {notification}
+                            </p>
+                          ),
+                        )
+                      : null}
+                    {turn.kind === 'agent'
+                      ? turn.response.calculations.map((calculation) => (
+                          <CalculationCard
+                            key={calculation.calculation_id}
+                            calculation={calculation}
+                            citations={turn.response.citations}
+                            onOpenEvidence={setOpenCitation}
+                          />
+                        ))
+                      : null}
+                    {turn.kind === 'agent' ? (
+                      <AgentTraceTimeline
+                        run={turn.response}
+                        onOpenEvidence={setOpenCitation}
+                      />
+                    ) : null}
+                  </div>
+                ))}
+              </>
             )}
+            {streamingTurn && streamingTurn.conversationId === selectedId ? (
+              <div className="chat-turn chat-turn--streaming">
+                <article className="question-card">
+                  <p className="eyebrow">You</p>
+                  <p>{streamingTurn.question}</p>
+                </article>
+                <article
+                  className="answer-card streaming-answer"
+                  aria-busy="true"
+                >
+                  <p className="streaming-progress">{streamingTurn.progress}</p>
+                  {streamingTurn.answer ? (
+                    <p>
+                      {streamingTurn.answer}
+                      <span className="streaming-cursor" aria-hidden="true" />
+                    </p>
+                  ) : null}
+                </article>
+              </div>
+            ) : null}
             {sending ? (
               <section className="chat-loading-card" role="status">
                 <span className="loading-dot" aria-hidden="true" />
@@ -726,12 +976,13 @@ export function ChatPage() {
                   <strong>
                     {sendingMode === 'agent'
                       ? 'Running a bounded agent flow through approved tools…'
-                      : 'Retrieving authorized evidence and validating citations…'}
+                      : (streamingTurn?.progress ??
+                        'Routing and validating the request…')}
                   </strong>
                   <small>
                     {sendingMode === 'agent'
                       ? 'The run stops at configured limits and exposes only a sanitized timeline.'
-                      : 'Only a complete, validated response will be displayed.'}
+                      : 'Answer text appears only after server-side validation.'}
                   </small>
                 </div>
               </section>
@@ -796,90 +1047,99 @@ export function ChatPage() {
             aria-busy={sending}
             onSubmit={(event) => void submit(event)}
           >
-            <fieldset className="response-mode-control" disabled={sending}>
-              <legend>Response mode</legend>
-              <div className="response-mode-options">
-                {(
-                  [
+            <details className="composer-controls">
+              <summary>Response and agent controls</summary>
+              <fieldset className="response-mode-control" disabled={sending}>
+                <legend>Response mode</legend>
+                <div className="response-mode-options">
+                  {(
                     [
-                      'fast',
-                      'Fast',
-                      'Lower cost. Best for simple questions from clear evidence.',
-                    ],
+                      [
+                        'fast',
+                        'Fast',
+                        'Lower cost. Best for simple questions from clear evidence.',
+                      ],
+                      [
+                        'auto',
+                        'Auto',
+                        'Recommended. The system chooses the appropriate model.',
+                      ],
+                      [
+                        'deep',
+                        'Deep',
+                        'Uses the stronger model for comparisons and complex analysis.',
+                      ],
+                    ] as const
+                  ).map(([value, label, description]) => (
+                    <label key={value} className="response-mode-option">
+                      <input
+                        type="radio"
+                        name="response-mode"
+                        value={value}
+                        checked={responseMode === value}
+                        onChange={() => setResponseMode(value)}
+                      />
+                      <span>{label}</span>
+                      <small>{description}</small>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <fieldset
+                className="response-mode-control"
+                disabled={sending || approvalResolving}
+              >
+                <legend>Agent control mode</legend>
+                <p className="field-help">
+                  Response mode controls model capability. Agent control
+                  controls when tools pause.
+                </p>
+                <div className="response-mode-options">
+                  {(
                     [
-                      'auto',
-                      'Auto',
-                      'Recommended. The system chooses the appropriate model.',
-                    ],
-                    [
-                      'deep',
-                      'Deep',
-                      'Uses the stronger model for comparisons and complex analysis.',
-                    ],
-                  ] as const
-                ).map(([value, label, description]) => (
-                  <label key={value} className="response-mode-option">
-                    <input
-                      type="radio"
-                      name="response-mode"
-                      value={value}
-                      checked={responseMode === value}
-                      onChange={() => setResponseMode(value)}
-                    />
-                    <span>{label}</span>
-                    <small>{description}</small>
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-            <fieldset
-              className="response-mode-control"
-              disabled={sending || approvalResolving}
-            >
-              <legend>Agent control mode</legend>
-              <p className="field-help">
-                Response mode controls model capability. Agent control controls
-                when tools pause.
-              </p>
-              <div className="response-mode-options">
-                {(
-                  [
-                    ['guided', 'Guided', 'Pause before every tool action.'],
-                    [
-                      'balanced',
-                      'Balanced',
-                      'Run safe read-only tools; pause for higher risk.',
-                    ],
-                    [
-                      'autonomous',
-                      'Autonomous',
-                      'Run authorized tools inside fixed host limits.',
-                    ],
-                  ] as const
-                ).map(([value, label, description]) => (
-                  <label key={value} className="response-mode-option">
-                    <input
-                      type="radio"
-                      name="agent-control-mode"
-                      value={value}
-                      checked={agentControlMode === value}
-                      onChange={() => setAgentControlMode(value)}
-                    />
-                    <span>{label}</span>
-                    <small>{description}</small>
-                  </label>
-                ))}
-              </div>
-            </fieldset>
+                      ['guided', 'Guided', 'Pause before every tool action.'],
+                      [
+                        'balanced',
+                        'Balanced',
+                        'Run safe read-only tools; pause for higher risk.',
+                      ],
+                      [
+                        'autonomous',
+                        'Autonomous',
+                        'Run authorized tools inside fixed host limits.',
+                      ],
+                    ] as const
+                  ).map(([value, label, description]) => (
+                    <label key={value} className="response-mode-option">
+                      <input
+                        type="radio"
+                        name="agent-control-mode"
+                        value={value}
+                        checked={agentControlMode === value}
+                        onChange={() => setAgentControlMode(value)}
+                      />
+                      <span>{label}</span>
+                      <small>{description}</small>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            </details>
             <label htmlFor="chat-question">Ask about approved documents</label>
             <textarea
               id="chat-question"
               value={question}
               maxLength={CHAT_QUESTION_MAX_LENGTH}
-              rows={4}
+              rows={2}
               disabled={sending}
               placeholder="Ask a question that can be supported by your authorized portfolio documents…"
               onChange={(event) => setQuestion(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault()
+                  event.currentTarget.form?.requestSubmit()
+                }
+              }}
             />
             <div className="chat-composer__actions">
               <small>
@@ -887,7 +1147,7 @@ export function ChatPage() {
               </small>
               {sending ? (
                 <button type="button" onClick={cancelRequest}>
-                  Cancel response
+                  Stop
                 </button>
               ) : null}
               <button

@@ -10,7 +10,7 @@ from app.agent.models import (
     RemainingBudgets,
     StructuredObservation,
 )
-from app.chat.contracts import GroundedGenerationRequest, LLMGeneration
+from app.chat.contracts import GroundedAgentContext, GroundedGenerationRequest, LLMGeneration
 from app.mcp_gateway.contracts import PermittedToolDescriptor
 from app.policies.models import AuthorizationContext
 
@@ -32,6 +32,8 @@ class PerceptionProvider(Protocol):
     @property
     def model_name(self) -> str: ...
 
+    def bind_request_context(self, context: GroundedAgentContext) -> None: ...
+
     async def perceive_user_query(self, *, query: str) -> PerceptionSnapshot: ...
 
     async def perceive_step_result(
@@ -49,6 +51,8 @@ class PerceptionProvider(Protocol):
 class DecisionProvider(Protocol):
     @property
     def model_name(self) -> str: ...
+
+    def bind_request_context(self, context: GroundedAgentContext) -> None: ...
 
     async def decide_initial(
         self,

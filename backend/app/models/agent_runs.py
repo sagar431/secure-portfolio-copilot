@@ -220,7 +220,10 @@ class AgentStep(Base):
         CheckConstraint(
             "tool_name IN ('portfolio.search_authorized_documents',"
             "'portfolio.get_document_excerpt','portfolio.calculate_ebitda_margin',"
-            "'portfolio.calculate_revenue_growth','portfolio.calculate_net_profit_margin')",
+            "'portfolio.calculate_revenue_growth','portfolio.calculate_net_profit_margin',"
+            "'portfolio.query_financial_metrics','portfolio.calculate_debt_to_equity',"
+            "'portfolio.calculate_cash_runway','portfolio.calculate_cagr',"
+            "'portfolio.search_memory','portfolio.propose_memory')",
             name="ck_agent_steps_tool",
         ),
         CheckConstraint(

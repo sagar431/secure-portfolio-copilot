@@ -6,9 +6,20 @@ from app.chat.contracts import (
     LLMProviderError,
 )
 from app.chat.fake import DeterministicFakeLLMProvider
+from app.chat.intent import IntentRouter, OpenRouterFuzzyIntentProvider
 from app.chat.openrouter_vertex import OpenRouterVertexLLMProvider
 from app.chat.router import DeterministicRoutingLLMProvider
 from app.core.config import Settings
+from app.memory.contracts import ConversationSummarizer, MemoryCandidateExtractor
+from app.memory.extractor import (
+    DeterministicFirstMemoryCandidateExtractor,
+    DeterministicMemoryCandidateExtractor,
+    OpenRouterMemoryCandidateExtractor,
+)
+from app.memory.summarizer import (
+    DeterministicConversationSummarizer,
+    OpenRouterConversationSummarizer,
+)
 from app.openrouter_vertex import OpenRouterVertexClient
 
 
@@ -72,3 +83,36 @@ def create_agent_finalizer(settings: Settings) -> LLMProvider:
     if settings.llm_provider in {"fake", "disabled"}:
         return create_llm_provider(settings)
     return _provider(settings, simple=False, max_attempts=2)
+
+
+def create_memory_extractor(settings: Settings) -> MemoryCandidateExtractor:
+    if settings.llm_provider in {"fake", "disabled"}:
+        return DeterministicMemoryCandidateExtractor()
+    client = _client(settings, simple=False)
+    if client is None:
+        return DeterministicMemoryCandidateExtractor(fail=True)
+    return DeterministicFirstMemoryCandidateExtractor(OpenRouterMemoryCandidateExtractor(client))
+
+
+def create_intent_router(settings: Settings) -> IntentRouter:
+    """Use deterministic high-precision routes and a constrained economical model for fuzzy text."""
+
+    if settings.llm_provider in {"fake", "disabled"}:
+        return IntentRouter()
+    client = _client(settings, simple=True)
+    return (
+        IntentRouter(OpenRouterFuzzyIntentProvider(client))
+        if client is not None
+        else IntentRouter()
+    )
+
+
+def create_conversation_summarizer(settings: Settings) -> ConversationSummarizer:
+    if settings.llm_provider in {"fake", "disabled"}:
+        return DeterministicConversationSummarizer()
+    client = _client(settings, simple=True)
+    return (
+        OpenRouterConversationSummarizer(client)
+        if client is not None
+        else DeterministicConversationSummarizer()
+    )

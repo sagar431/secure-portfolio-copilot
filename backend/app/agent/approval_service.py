@@ -324,6 +324,12 @@ class AgentApprovalService:
             "portfolio.calculate_ebitda_margin": "Calculate EBITDA margin",
             "portfolio.calculate_revenue_growth": "Calculate revenue growth",
             "portfolio.calculate_net_profit_margin": "Calculate net profit margin",
+            "portfolio.query_financial_metrics": "Query authorized financial metrics",
+            "portfolio.calculate_debt_to_equity": "Calculate debt-to-equity",
+            "portfolio.calculate_cash_runway": "Calculate cash runway",
+            "portfolio.calculate_cagr": "Calculate CAGR",
+            "portfolio.search_memory": "Search authorized private memory",
+            "portfolio.propose_memory": "Propose a private memory",
         }
         return ApprovalStateData(
             approval_id=approval.id,
@@ -334,8 +340,10 @@ class AgentApprovalService:
             tool_name=tool_name,
             risk_level=approval.approval_risk_class,
             resource_type=(
-                "authorized financial data"
-                if ".calculate_" in tool_name
+                "authorized private memory"
+                if tool_name in {"portfolio.search_memory", "portfolio.propose_memory"}
+                else "authorized financial data"
+                if ".calculate_" in tool_name or tool_name == "portfolio.query_financial_metrics"
                 else "authorized portfolio documents"
             ),
             estimated_cost_class="low",

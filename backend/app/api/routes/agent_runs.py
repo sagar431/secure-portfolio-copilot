@@ -16,11 +16,17 @@ from app.core.config import Settings, get_settings
 from app.db.session import get_db_session
 from app.embeddings.factory import create_embedding_provider
 from app.mcp_gateway.adapters import (
+    CalculateCagrAdapter,
+    CalculateCashRunwayAdapter,
+    CalculateDebtToEquityAdapter,
     CalculateEbitdaMarginAdapter,
     CalculateNetProfitMarginAdapter,
     CalculateRevenueGrowthAdapter,
     GetDocumentExcerptAdapter,
+    ProposeMemoryAdapter,
+    QueryFinancialMetricsAdapter,
     SearchAuthorizedDocumentsAdapter,
+    SearchMemoryAdapter,
 )
 from app.mcp_gateway.gateway import ApprovedToolAdapter, ApprovedToolGateway
 from app.schemas.agent_runs import (
@@ -52,6 +58,12 @@ def get_agent_run_service(
             cast(ApprovedToolAdapter, CalculateEbitdaMarginAdapter(session)),
             cast(ApprovedToolAdapter, CalculateRevenueGrowthAdapter(session)),
             cast(ApprovedToolAdapter, CalculateNetProfitMarginAdapter(session)),
+            cast(ApprovedToolAdapter, QueryFinancialMetricsAdapter(session)),
+            cast(ApprovedToolAdapter, CalculateDebtToEquityAdapter(session)),
+            cast(ApprovedToolAdapter, CalculateCashRunwayAdapter(session)),
+            cast(ApprovedToolAdapter, CalculateCagrAdapter(session)),
+            cast(ApprovedToolAdapter, SearchMemoryAdapter(session)),
+            cast(ApprovedToolAdapter, ProposeMemoryAdapter(session)),
         ),
         timeout_seconds=settings.agent_tool_timeout_seconds,
         max_transient_retries=settings.agent_tool_max_transient_retries,
@@ -76,6 +88,7 @@ def get_agent_run_service(
         model_name=perception.model_name,
         route_reason_code=agent_route_reason(settings),
         low_confidence_threshold=settings.router_low_confidence_threshold,
+        max_recent_messages=settings.memory_recent_message_limit,
     )
 
 

@@ -28,6 +28,22 @@ class GroundedMemory:
     memory_id: UUID
     scope: str
     content: str
+    memory_type: str = "SEMANTIC"
+
+
+@dataclass(frozen=True, slots=True)
+class GroundedWorkingMessage:
+    role: Literal["user", "assistant"]
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class GroundedAgentContext:
+    """Bounded, non-authoritative context shared by agent model stages."""
+
+    memories: tuple[GroundedMemory, ...] = ()
+    recent_messages: tuple[GroundedWorkingMessage, ...] = ()
+    conversation_summary: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +51,8 @@ class GroundedGenerationRequest:
     question: str
     evidence: tuple[GroundedEvidence, ...]
     memories: tuple[GroundedMemory, ...] = ()
+    recent_messages: tuple[GroundedWorkingMessage, ...] = ()
+    conversation_summary: str | None = None
     routing: RoutingSignals | None = None
     response_mode: ResponseMode = ResponseMode.AUTO
 

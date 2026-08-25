@@ -1,9 +1,13 @@
 import type { CalculationData, GroundedCitationData } from '../types/chat'
 
 const labels = {
+  financial_metric: 'Financial metric',
   ebitda_margin: 'EBITDA margin',
   revenue_growth: 'Revenue growth',
   net_profit_margin: 'Net profit margin',
+  debt_to_equity: 'Debt-to-equity',
+  cash_runway: 'Stress-case cash runway',
+  cagr: 'Revenue CAGR',
 } as const
 
 export function CalculationCard({
@@ -31,7 +35,10 @@ export function CalculationCard({
             {calculation.company_slug} · {calculation.period}
           </p>
         </div>
-        <strong>{calculation.result.toFixed(2)}%</strong>
+        <strong>
+          {calculation.result.toFixed(2)}
+          {calculation.unit === 'percent' ? '%' : ` ${calculation.unit}`}
+        </strong>
       </header>
       <section aria-label="Formula">
         <h4>Formula</h4>

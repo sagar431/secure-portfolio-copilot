@@ -10,6 +10,7 @@ from app.agent.models import (
     RemainingBudgets,
     StructuredObservation,
 )
+from app.chat.contracts import GroundedAgentContext
 from app.mcp_gateway.contracts import PermittedToolDescriptor
 from app.policies.models import AuthorizationContext
 
@@ -24,6 +25,7 @@ class DeterministicFakePerceptionProvider:
         self._snapshots = deque(snapshots)
         self.user_query_calls = 0
         self.step_result_calls = 0
+        self.request_context = GroundedAgentContext()
         self.step_result_inputs: list[
             tuple[
                 str,
@@ -34,6 +36,9 @@ class DeterministicFakePerceptionProvider:
                 RemainingBudgets,
             ]
         ] = []
+
+    def bind_request_context(self, context: GroundedAgentContext) -> None:
+        self.request_context = context
 
     def _next(self) -> PerceptionSnapshot:
         if not self._snapshots:
@@ -78,7 +83,11 @@ class DeterministicFakeDecisionProvider:
         self._decisions = deque(decisions)
         self.initial_calls = 0
         self.mid_session_calls = 0
+        self.request_context = GroundedAgentContext()
         self.seen_catalogs: list[tuple[PermittedToolDescriptor, ...]] = []
+
+    def bind_request_context(self, context: GroundedAgentContext) -> None:
+        self.request_context = context
 
     def _next(self) -> DecisionResult:
         if not self._decisions:

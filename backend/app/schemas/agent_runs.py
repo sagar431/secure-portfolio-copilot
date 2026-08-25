@@ -10,7 +10,11 @@ SafeReasonCode = Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{1,95}$")]
 SafeToolName = Annotated[
     str,
     Field(
-        pattern=r"^portfolio\.(search_authorized_documents|get_document_excerpt|calculate_(ebitda_margin|revenue_growth|net_profit_margin))$"
+        pattern=(
+            r"^portfolio\.(search_authorized_documents|get_document_excerpt|"
+            r"query_financial_metrics|search_memory|propose_memory|calculate_(ebitda_margin|"
+            r"revenue_growth|net_profit_margin|debt_to_equity|cash_runway|cagr))$"
+        )
     ),
 ]
 
@@ -113,7 +117,11 @@ class ApprovalStateData(BaseModel):
     safe_explanation: Annotated[str, Field(min_length=1, max_length=180)]
     tool_name: SafeToolName
     risk_level: ApprovalRiskClass
-    resource_type: Literal["authorized portfolio documents", "authorized financial data"]
+    resource_type: Literal[
+        "authorized portfolio documents",
+        "authorized financial data",
+        "authorized private memory",
+    ]
     estimated_cost_class: Literal["low", "standard"]
     safe_scope_summary: Annotated[str, Field(min_length=1, max_length=160)]
     remaining_budget: RemainingApprovalBudgetData

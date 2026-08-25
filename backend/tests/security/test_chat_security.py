@@ -25,6 +25,7 @@ from app.chat.service import (
 )
 from app.core.config import Settings
 from app.core.errors import APIError
+from app.memory.extractor import DeterministicMemoryCandidateExtractor
 from app.model_routing import ResponseMode
 from app.models.chat import ChatRequestTrace
 from app.models.identity import Capability, GrantSource
@@ -377,7 +378,8 @@ async def test_lowercase_cross_tenant_or_department_target_abstains_without_prov
 
     assert search.calls == 0
     assert provider.requests == []
-    assert response.status == "insufficient_evidence"
+    assert response.status == "refused"
+    assert response.intent_route == "REFUSE"
     assert response.citations == ()
     assert response.requested_response_mode is response_mode
     assert response.resolved_response_mode is None
@@ -418,6 +420,7 @@ async def test_no_authorized_evidence_skips_provider_for_every_response_mode(
     assert search.calls == 1
     assert provider.requests == []
     assert response.status == "insufficient_evidence"
+    assert response.intent_route == "DOCUMENT_QUESTION"
     assert response.requested_response_mode is response_mode
     assert response.resolved_response_mode is None
 
@@ -692,6 +695,44 @@ async def test_unknown_conversation_fails_safely_before_retrieval_or_provider(
     assert captured.value.code == "not_found"
     assert captured.value.message == "Conversation was not found."
     assert search.calls == 0
+    assert provider.requests == []
+
+
+@pytest.mark.asyncio
+async def test_memory_extraction_failure_does_not_fail_completed_chat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context()
+    conversation = SimpleNamespace(
+        id=uuid4(),
+        tenant_id=context.scope.grants[0].home_tenant_id,
+        user_id=context.identity.user_id,
+    )
+    monkeypatch.setattr(
+        "app.chat.service.get_owned_conversation",
+        lambda *args, **kwargs: _async_value(conversation),
+    )
+    monkeypatch.setattr("app.chat.service.add_message", _message_stub)
+    monkeypatch.setattr("app.chat.service.add_trace", lambda *args, **kwargs: None)
+    provider = _RecordingProvider()
+    service = GroundedChatService(  # type: ignore[arg-type]
+        _Session(),
+        _SearchService(()),
+        provider,
+        DeterministicMemoryCandidateExtractor(fail=True),
+        max_evidence_chunks=5,
+    )
+
+    response = await service.answer(
+        context,
+        conversation_id=conversation.id,
+        question="Remember that I prefer financial values in INR crores.",
+        request_id="memory-extraction-failure",
+    )
+
+    assert response.status == "memory_write"
+    assert response.intent_route == "MEMORY_WRITE"
+    assert response.memory_notifications == ()
     assert provider.requests == []
 
 
